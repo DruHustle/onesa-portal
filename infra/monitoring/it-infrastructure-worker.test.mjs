@@ -19,11 +19,12 @@ async function sampleStatus(status) {
 
 test('a homepage HTTP 200 is not a passed application health check', async () => {
   const result = await sampleStatus(200);
-  assert.equal(result.scope, 'edge_http_identity_and_pasofi_capability_preflight');
+  assert.equal(result.scope, 'edge_http_identity_portal_and_pasofi_preflight');
   assert.ok(Array.isArray(result.services) && result.services.length > 0);
-  assert.ok(result.services.filter(x => x.name !== 'Onesa Account').every(x => x.state === 'unknown' && x.status === 200));
+  assert.ok(result.services.filter(x => !['Onesa Account','Company Portal'].includes(x.name)).every(x => x.state === 'unknown' && x.status === 200));
   const identity = result.services.find(x => x.name === 'Onesa Account');
   assert.equal(identity.state, 'bad', 'A contentless HTTP 200 cannot verify /readyz');
+  assert.equal(result.services.find(x=>x.name==='Company Portal').state,'bad','A contentless HTTP 200 cannot verify Portal DB readiness');
   assert.ok(result.services.every(x => !/operational|healthy/i.test(x.label)));
 });
 
@@ -43,7 +44,8 @@ test('the verified Identity readiness endpoint alone may display healthy', async
     const identity = result.services.find(x=>x.name==='Onesa Account');
     assert.equal(identity.state,'ok');
     assert.equal(identity.label,'Identity ready');
-    assert.ok(result.services.filter(x=>x.name!=='Onesa Account').every(x=>x.state==='unknown'));
+    assert.equal(result.services.find(x=>x.name==='Company Portal').state,'bad');
+    assert.ok(result.services.filter(x=>!['Onesa Account','Company Portal'].includes(x.name)).every(x=>x.state==='unknown'));
     assert.equal(calls.filter(url=>url.endsWith('/readyz')).length,1);
   } finally {globalThis.fetch=previous;}
 });
@@ -64,7 +66,8 @@ test('malformed, misleading and oversized Identity responses never pass readines
       const response=await worker.fetch(new Request(base+'/api/status'));
       const result=await response.json();
       assert.equal(result.services.find(x=>x.name==='Onesa Account').state,'bad');
-      assert.ok(result.services.filter(x=>x.name!=='Onesa Account').every(x=>x.state==='unknown'));
+      assert.equal(result.services.find(x=>x.name==='Company Portal').state,'bad');
+      assert.ok(result.services.filter(x=>!['Onesa Account','Company Portal'].includes(x.name)).every(x=>x.state==='unknown'));
     }finally{globalThis.fetch=previous;}
   }
 });
@@ -115,6 +118,68 @@ test('control methods cannot mutate the directory', async () => {
   assert.equal(response.status, 405);
 });
 
+test('Portal DB-backed readiness checks an exact bounded JSON response, not the homepage', async () => {
+  const original=globalThis.fetch, calls=[];
+  globalThis.fetch=async url=>{
+    calls.push(String(url));
+    if(String(url)==='https://portal.onesa.eu/api/v1/ready') return Response.json({status:'ready'});
+    if(String(url)==='https://account.onesa.eu/readyz') return Response.json({service:'onesa-identity',ready:true});
+    return new Response('<html>homepage only</html>',{status:200,headers:{'content-type':'text/html'}});
+  };
+  try{
+    const status=await (await worker.fetch(new Request(base+'/api/status'))).json();
+    const portal=status.services.find(x=>x.name==='Company Portal');
+    assert.equal(portal.state,'ok');
+    assert.equal(portal.label,'Portal DB ready');
+    assert.match(portal.detail,/customer\/admin flows unverified/);
+    assert.equal(calls.filter(x=>x==='https://portal.onesa.eu/api/v1/ready').length,1);
+    assert.equal(calls.filter(x=>x==='https://portal.onesa.eu').length,0);
+    assert.equal(status.services.find(x=>x.name==='Onesa Account').state,'ok');
+    assert.ok(status.services.filter(x=>!['Onesa Account','Company Portal'].includes(x.name))
+      .every(x=>x.state==='unknown'));
+  }finally{globalThis.fetch=original;}
+});
+
+test('Portal liveness, misleading JSON, HTML and malformed or oversized responses never pass readiness', async () => {
+  const examples=[
+    () => Response.json({status:'ok'}),
+    () => Response.json({status:true}),
+    () => Response.json({ready:true}),
+    () => new Response('<html>Service available</html>',{status:200,headers:{'content-type':'text/html'}}),
+    () => new Response('invalid JSON',{status:200,headers:{'content-type':'application/json'}}),
+    () => new Response('x'.repeat(5000),{status:200,headers:{'content-type':'application/json'}}),
+    () => new Response(null,{status:200,headers:{'content-type':'application/json'}}),
+  ];
+  for(const fixture of examples){
+    const original=globalThis.fetch;
+    globalThis.fetch=async url=>String(url)==='https://portal.onesa.eu/api/v1/ready'
+      ? fixture():new Response('home',{status:200,headers:{'content-type':'text/html'}});
+    try{
+      const result=await (await worker.fetch(new Request(base+'/api/status'))).json();
+      const portal=result.services.find(x=>x.name==='Company Portal');
+      assert.equal(portal.state,'bad');
+      assert.equal(portal.label,'Invalid Portal readiness');
+      assert.ok(!JSON.stringify(result).includes('invalid JSON'));
+    }finally{globalThis.fetch=original;}
+  }
+});
+
+test('live 503 DATABASE_CONNECTION is explicitly classified as Portal API unavailable', async()=>{
+  const original=globalThis.fetch;
+  globalThis.fetch=async url=>String(url)==='https://portal.onesa.eu/api/v1/ready'
+    ? Response.json({error:{code:'DATABASE_CONNECTION',message:'private-db-error'}},{status:503})
+    : new Response('Home page',{status:200,headers:{'content-type':'text/html'}});
+  try{
+    const result=await (await worker.fetch(new Request(base+'/api/status'))).json();
+    const portal=result.services.find(x=>x.name==='Company Portal');
+    assert.equal(portal.status,503);
+    assert.equal(portal.state,'bad');
+    assert.equal(portal.label,'Portal API not ready');
+    assert.match(portal.detail,/database-backed readiness failed/);
+    assert.ok(!JSON.stringify(result).includes('private-db-error'));
+  }finally{globalThis.fetch=original;}
+});
+
 test('live disabled PasoFi checkout and network are a critical operational failure, not a healthy homepage', async () => {
   const original = globalThis.fetch;
   const observed = [];
@@ -136,7 +201,7 @@ test('live disabled PasoFi checkout and network are a critical operational failu
     assert.match(pasofi.detail,/cannot serve paying customers/);
     assert.equal(observed.filter(url=>url.endsWith('/api/capabilities')).length,1);
     assert.equal(observed.filter(url=>url==='https://pasofi.mobile.onesa.eu').length,0);
-    assert.ok(body.services.filter(s=>s.name!=='PasoFi' && s.name!=='Onesa Account').every(s=>s.state==='unknown'));
+    assert.ok(body.services.filter(s=>!['PasoFi','Onesa Account','Company Portal'].includes(s.name)).every(s=>s.state==='unknown'));
   } finally {globalThis.fetch=original;}
 });
 
