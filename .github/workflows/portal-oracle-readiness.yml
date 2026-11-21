@@ -1,0 +1,29 @@
+name: Portal Oracle readiness contract
+'on':
+  pull_request:
+    branches: [dev, staging, main]
+    paths:
+      - compose.oracle-backend.yaml
+      - scripts/test_portal_oracle_readiness.mjs
+      - .github/workflows/portal-oracle-readiness.yml
+  push:
+    branches: [dev, staging, main]
+    paths:
+      - compose.oracle-backend.yaml
+      - scripts/test_portal_oracle_readiness.mjs
+      - .github/workflows/portal-oracle-readiness.yml
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  readiness-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      - run: node --test scripts/test_portal_oracle_readiness.mjs
