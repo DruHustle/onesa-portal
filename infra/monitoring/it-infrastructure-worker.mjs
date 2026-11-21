@@ -28,7 +28,7 @@ async function verifiedIdentityReadiness(response){
 // A 200 homepage, HTML login page, redirect or liveness-only response must
 // never be treated as a working Portal database-backed customer journey.
 async function verifiedPortalReadiness(response){
- if(response.status!==200||!/^application\\/json(?:;|$)/i.test(response.headers.get("content-type")||"")||!response.body)return false;
+ if(response.status!==200||!/^application\/json(?:;|$)/i.test(response.headers.get("content-type")||"")||!response.body)return false;
  const reader=response.body.getReader(),decoder=new TextDecoder("utf-8",{fatal:true});
  let size=0,text="";
  try{
