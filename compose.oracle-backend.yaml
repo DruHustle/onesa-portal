@@ -86,7 +86,8 @@
         "127.0.0.1:18300:8300"
       ],
       "networks": [
-        "production"
+        "production",
+        "portal_database"
       ],
       "mem_limit": "384m",
       "cpus": 0.6,
@@ -118,13 +119,18 @@
         "org.onesa.source-commit": "${ORACLE_PRODUCTION_COMMIT:?Exact source commit required}"
       },
       "volumes": [
-        "production_storage:/app/storage"
+        "production_storage:/app/storage",
+        "/etc/onesa/production-databases/portal/server.crt:/run/onesa/portal-db-ca.crt:ro"
       ]
     }
   },
   "networks": {
     "staging": null,
-    "production": null
+    "production": null,
+    "portal_database": {
+      "external": true,
+      "name": "onesa-portal-database-production"
+    }
   },
   "volumes": {
     "staging_storage": null,

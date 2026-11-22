@@ -17,6 +17,8 @@ const eightClients = Object.freeze({version:19, baselines:[12,14,15,16,17,18,19]
  '018_customer_product_identity.sql':'c9abe17297fd4df3e9e1a6ca5d10816ca233c34ffdecc31c1644ec36ceb0dd3c',
  '019_engineering_enrollment_accounts.sql':'ba981080164f8a223e395f7a452ac5d12759ffeff6b639a1451bd3471cad06d7',
 }});
+// The production database CA, bind-mounted read-only by the release adapter (never a host path).
+export const mountedDatabaseCA='/run/onesa/portal-db-ca.crt';
 const need=(value,code='IDENTITY_MIGRATION_REFUSED')=>{if(!value)throw Error(code);};
 const exact=(value,keys)=>value&&Object.getPrototypeOf(value)===Object.prototype&&Object.keys(value).sort().join(',')===[...keys].sort().join(',');
 const hex=/^[a-f0-9]{64}$/;
@@ -35,15 +37,21 @@ export function validateRequest(request){return reviewedRequest(request,historic
 
 function reviewedRequest(request,policy){
  const fields=['action','environment','operation_id','source_commit','database','owner_uri','runtime_uri','migrations'];
+ // A private CA arrives either pinned in custody (PEM) or as the one mounted production file, never both.
  if(Object.hasOwn(request||{},'database_ca_pem'))fields.push('database_ca_pem');
+ else if(Object.hasOwn(request||{},'database_ca_file'))fields.push('database_ca_file');
  need(exact(request,fields));
  if(Object.hasOwn(request,'database_ca_pem'))validateDatabaseCA(request.database_ca_pem);
+ if(Object.hasOwn(request,'database_ca_file'))need(request.database_ca_file===mountedDatabaseCA&&request.environment==='production','IDENTITY_DATABASE_CA_INVALID');
  need(['inspect','apply'].includes(request.action)&&['staging','production'].includes(request.environment));
  need(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(request.operation_id));
  need(/^[a-f0-9]{40}$/.test(request.source_commit));
  const db=request.database;
  need(exact(db,['host','database','owner_role','application_role']));
- need(/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(db.host)&&/^[a-z][a-z0-9_]{0,62}$/.test(db.database));
+ // A single-label host is a container name on a private Docker network; accept it
+ // only when the connection trusts a pinned private CA rather than public roots.
+ const privateCA=Object.hasOwn(request,'database_ca_pem')||Object.hasOwn(request,'database_ca_file');
+ need(/^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/.test(db.host)&&(db.host.includes('.')||privateCA)&&/^[a-z][a-z0-9_]{0,62}$/.test(db.database));
  need([db.owner_role,db.application_role].every(v=>/^[a-z][a-z0-9_]{0,62}$/.test(v))&&db.owner_role!==db.application_role);
  need(exact(request.migrations,Object.keys(request.migrations))&&Object.keys(request.migrations).length===policy.version);
  const names=Object.keys(request.migrations).sort();
@@ -60,6 +68,15 @@ export function validateDatabaseCA(pem){
  let certificate;try{certificate=new X509Certificate(pem);}catch{need(false,'IDENTITY_DATABASE_CA_INVALID');}
  need(certificate.ca===true,'IDENTITY_DATABASE_CA_INVALID');
  return pem;
+}
+
+// The URIs' sslrootcert is stripped before connecting, so the mounted production CA
+// is read here and must pass the same single-CA check as a custody-pinned PEM.
+export async function requestCA(request,read=readFile){
+ if(!Object.hasOwn(request,'database_ca_file'))return request.database_ca_pem;
+ need(request.database_ca_file===mountedDatabaseCA,'IDENTITY_DATABASE_CA_INVALID');
+ let pem;try{pem=await read(mountedDatabaseCA,'utf8');}catch{need(false,'IDENTITY_DATABASE_CA_UNAVAILABLE');}
+ return validateDatabaseCA(pem);
 }
 
 export function validateState(rows,manifest){return reviewedState(rows,manifest,historical);}
@@ -113,14 +130,15 @@ async function liveRevision(request,policy){
  reviewedRequest(request,policy);
  // Keep the application TLS trust policy even though readiness is side-effect-free.
  const {permittedCertificateRoots}=await import('/app/dist/src/security/tls-trust.js');
- if(request.database_ca_pem)need(permittedCertificateRoots([request.database_ca_pem]).length===1,'IDENTITY_DATABASE_CA_BLOCKED');
+ const ca=await requestCA(request);
+ if(ca)need(permittedCertificateRoots([ca]).length===1,'IDENTITY_DATABASE_CA_BLOCKED');
  const {default:pg}=await import('/app/node_modules/pg/lib/index.js');
  const {applicationRoleSafe}=await import('/app/dist/src/services/database-role.js');
  const {databaseReady}=await import('/app/dist/src/services/database-readiness.js');
  const connect=async(uri,owner)=>{
   const u=connectionScope(uri,request.database,owner);
   for(const key of [...u.searchParams.keys()])u.searchParams.delete(key);
-  const c=new pg.Client({connectionString:u.href,ssl:{rejectUnauthorized:true,servername:request.database.host,...(request.database_ca_pem?{ca:request.database_ca_pem}:{})},enableChannelBinding:true,connectionTimeoutMillis:10000,statement_timeout:45000,query_timeout:50000});
+  const c=new pg.Client({connectionString:u.href,ssl:{rejectUnauthorized:true,servername:request.database.host,...(ca?{ca}:{})},enableChannelBinding:true,connectionTimeoutMillis:10000,statement_timeout:45000,query_timeout:50000});
   await c.connect();need(c.connection.stream.encrypted===true&&c.connection.stream.authorized===true);return c;
  };
  let client,runtime,active=false;

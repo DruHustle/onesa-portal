@@ -426,11 +426,17 @@ def preserved(plan, replacements=()):
     for env in ENVIRONMENTS:
         for kind, name in TARGETS[env].items():
             row = rows[name]
+            profile = stable_profile(row)
             r.require(
-                digest(stable_profile(row))
+                digest(profile)
                 == plan["environments"][env][kind]["profile_sha256"],
                 "IDENTITY_RUNTIME_PROFILE_CHANGED",
             )
+            if env == "production":
+                # Production reaches the private VM PostgreSQL only through its internal
+                # network: exactly the target's own network plus that one, and the
+                # read-only database CA bind (the API/worker adapters' contract).
+                common.production_database_attachment(profile)
             host, config = row["HostConfig"], row["Config"]
             r.require(
                 config["User"] == "node"
@@ -450,7 +456,7 @@ def preserved(plan, replacements=()):
                 and host["CapDrop"] == ["ALL"]
                 and host["SecurityOpt"] == ["no-new-privileges:true"]
                 and host["PidsLimit"] == 128
-                and len(row["NetworkSettings"]["Networks"]) == 1,
+                and (env == "production" or len(profile["networks"]) == 1),
                 "IDENTITY_EXISTING_RESTRICTED_RUNTIME_REQUIRED",
             )
     return rows
@@ -817,8 +823,30 @@ def migration(binding, plan, env, operation, migrations, action, target):
     entry = "liveV3" if eight_client_profile(plan) else "live"
     program += "\nimport fs from 'node:fs';try{console.log(JSON.stringify(await " + entry + "(JSON.parse(fs.readFileSync(0,'utf8')))));}catch{console.log(JSON.stringify({state:'IDENTITY_MIGRATION_REFUSED_INSPECT_WITHOUT_RETRY'}));process.exitCode=1;}\n"
     row = json.loads(r.docker("inspect", TARGETS[env]["api"]))[0]
-    network = list(row["NetworkSettings"]["Networks"])
-    r.require(len(network) == 1, "IDENTITY_EXISTING_DATABASE_NETWORK_REQUIRED")
+    networks = sorted(row["NetworkSettings"]["Networks"])
+    ca_mount = []
+    if env == "production":
+        # The private VM database publishes no port. The migration joins only its
+        # internal network, never the API's own bridge.
+        r.require(
+            len(networks) == 2 and common.PRODUCTION_DATABASE_NETWORK in networks,
+            "IDENTITY_EXISTING_DATABASE_NETWORK_REQUIRED",
+        )
+        network = common.PRODUCTION_DATABASE_NETWORK
+        if "database_ca_pem" not in custody:
+            # Trust the CA the live API and worker mount. --mount (unlike -v) fails
+            # when the host file is missing; the helper strips URI sslrootcert, so
+            # the request names the mounted file explicitly.
+            ca = common.PRODUCTION_DATABASE_CA
+            ca_mount = [
+                "--mount",
+                "type=bind,source=" + ca["Source"]
+                + ",target=" + ca["Destination"] + ",readonly",
+            ]
+            request["database_ca_file"] = ca["Destination"]
+    else:
+        r.require(len(networks) == 1, "IDENTITY_EXISTING_DATABASE_NETWORK_REQUIRED")
+        network = networks[0]
     intent = target / ("migration-" + action + ".intent.json")
     r.write(
         intent,
@@ -837,7 +865,8 @@ def migration(binding, plan, env, operation, migrations, action, target):
         "-i",
         "--pull=never",
         "--network",
-        network[0],
+        network,
+        *ca_mount,
         "--read-only",
         "--memory",
         "256m",
