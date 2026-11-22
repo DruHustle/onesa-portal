@@ -23,12 +23,14 @@ services:
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    volumes: [scanner_socket:/run/onesa-scanner:ro]
+    # The production database is the private PostgreSQL container on the VM. The
+    # worker reaches it only through the internal database network and verifies
+    # its server certificate against this read-only CA (verify-full TLS).
+    volumes:
+      - scanner_socket:/run/onesa-scanner:ro
+      - /etc/onesa/production-databases/portal/server.crt:/run/onesa/portal-db-ca.crt:ro
     group_add: ['3000']
-    # The prepared private database joins this existing bridge and the API bridge.
-    # Keep the worker on one network; its DATABASE_URL changes only at an approved
-    # coordinated cutover. The inert database template lives in the API Compose file.
-    networks: [worker_egress]
+    networks: [worker_egress, portal_database]
     mem_limit: 512m
     cpus: 0.1
     healthcheck:
@@ -39,6 +41,9 @@ services:
       retries: 3
 networks:
   worker_egress:
+  portal_database:
+    external: true
+    name: onesa-portal-database-production
 volumes:
   scanner_socket:
     external: true

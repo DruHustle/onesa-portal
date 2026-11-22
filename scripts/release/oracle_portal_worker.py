@@ -97,6 +97,7 @@ def validate_plan(binding, plan):
         "COMPLETE_WORKER_PRESERVATION_BASELINE",
     )
     runtime = plan["runtime"]
+    own = common.production_database_attachment(runtime)
     r.require(
         runtime["user"] == "node"
         and runtime["entrypoint"] == ["docker-entrypoint.sh"]
@@ -111,12 +112,11 @@ def validate_plan(binding, plan):
         and runtime["memory"] == 512 * 1024**2
         and runtime["nano_cpus"] == 100000000
         and runtime["pids_limit"] == 128
-        and len(runtime["mounts"]) == 1
-        and len(runtime["networks"]) == 1
-        and runtime["mounts"][0]["Type"] == "volume"
-        and runtime["mounts"][0]["Name"] == SOCKET
-        and runtime["mounts"][0]["Destination"] == "/run/onesa-scanner"
-        and runtime["mounts"][0]["RW"] is False,
+        and len(own) == 1
+        and own[0]["Type"] == "volume"
+        and own[0]["Name"] == SOCKET
+        and own[0]["Destination"] == "/run/onesa-scanner"
+        and own[0]["RW"] is False,
         "EXISTING_PRODUCTION_WORKER_PROFILE_REQUIRED",
     )
     recipe = plan["recipe"]
