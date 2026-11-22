@@ -94,6 +94,7 @@ def validate_plan(binding, plan):
         "COMPLETE_API_PRESERVATION_BASELINE",
     )
     runtime = plan["runtime"]
+    own = common.production_database_attachment(runtime)
     r.require(
         runtime["user"] == "node"
         and runtime["entrypoint"] == ["docker-entrypoint.sh"]
@@ -109,12 +110,11 @@ def validate_plan(binding, plan):
         and runtime["memory"] == 384 * 1024**2
         and runtime["nano_cpus"] == 600000000
         and runtime["pids_limit"] == 128
-        and len(runtime["mounts"]) == 1
-        and len(runtime["networks"]) == 1
-        and runtime["mounts"][0]["Type"] == "volume"
-        and runtime["mounts"][0]["Name"] == STORAGE
-        and runtime["mounts"][0]["Destination"] == "/app/storage"
-        and runtime["mounts"][0]["RW"] is True
+        and len(own) == 1
+        and own[0]["Type"] == "volume"
+        and own[0]["Name"] == STORAGE
+        and own[0]["Destination"] == "/app/storage"
+        and own[0]["RW"] is True
         and runtime["init"] is True,
         "EXISTING_PRODUCTION_API_PROFILE_REQUIRED",
     )

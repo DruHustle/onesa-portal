@@ -194,7 +194,12 @@ class TargetFixture(unittest.TestCase):
     def test_render_is_separate_inert_and_cannot_seed_or_create_storage(self):
         existing = json.loads((ROOT / "compose.oracle-backend.yaml").read_text())
         self.assertEqual(set(existing["services"]), {"staging", "production"})
-        self.assertEqual(set(existing["networks"]), {"staging", "production"})
+        self.assertEqual(
+            set(existing["networks"]), {"staging", "production", "portal_database"}
+        )
+        # Production joins the already running private database network; the
+        # recipe never creates it.
+        self.assertTrue(existing["networks"]["portal_database"]["external"])
         self.assertEqual(set(existing["volumes"]), {"staging_storage", "production_storage"})
         self.assertNotIn("${", json.dumps(existing["x-portal-container-primary"]))
         with patch.object(target, "inspect") as observe, patch.object(subprocess, "run") as execute:

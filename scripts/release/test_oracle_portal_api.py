@@ -13,6 +13,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import oracle_portal as r
+import oracle_portal_scanner as common
 import oracle_portal_api as worker
 import test_oracle_portal_scanner as scanner_fixtures
 from test_oracle_portal_scanner import inputs as scanner_inputs
@@ -50,9 +51,12 @@ def inputs():
                 "Name": worker.STORAGE,
                 "Destination": "/app/storage",
                 "RW": True,
-            }
+            },
+            dict(common.PRODUCTION_DATABASE_CA),
         ],
-        "networks": ["synthetic-private-network"],
+        "networks": sorted(
+            ["synthetic-private-network", common.PRODUCTION_DATABASE_NETWORK]
+        ),
         "init": True,
     }
     directory = "/opt/onesa/backends"
@@ -110,6 +114,11 @@ class ContractTests(unittest.TestCase):
             lambda p: p["runtime"].update(port_bindings={"8300/tcp": [{}]}),
             lambda p: p["runtime"]["mounts"][0].update(RW=False),
             lambda p: p["runtime"]["mounts"][0].update(Name="different-volume"),
+            lambda p: p["runtime"].update(networks=["synthetic-private-network"]),
+            lambda p: p["runtime"]["networks"].append("synthetic-extra-network"),
+            lambda p: p["runtime"]["mounts"].pop(1),
+            lambda p: p["runtime"]["mounts"][1].update(RW=True),
+            lambda p: p["runtime"]["mounts"][1].update(Source="/unbound/ca.crt"),
             lambda p: p["recipe"].update(project="onesa-portal-oracle-staging"),
             lambda p: p["recipe"]["files"][0].update(path="/unbound/compose.yaml"),
             lambda p: p["rollback"].update(automatic=True),
