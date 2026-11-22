@@ -13,6 +13,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import oracle_portal as r
+import oracle_portal_scanner as common
 import oracle_portal_worker as worker
 import test_oracle_portal_scanner as scanner_fixtures
 from test_oracle_portal_scanner import inputs as scanner_inputs
@@ -49,9 +50,12 @@ def inputs():
                 "Name": worker.SOCKET,
                 "Destination": "/run/onesa-scanner",
                 "RW": False,
-            }
+            },
+            dict(common.PRODUCTION_DATABASE_CA),
         ],
-        "networks": ["synthetic-private-network"],
+        "networks": sorted(
+            ["synthetic-private-network", common.PRODUCTION_DATABASE_NETWORK]
+        ),
     }
     directory = "/opt/onesa/portal-production/releases/" + "f" * 40
     plan["runtime"].update(
@@ -133,6 +137,22 @@ class ContractTests(unittest.TestCase):
                 with self.subTest(key=key):
                     self.assertNotEqual(worker.profile(changed), original)
 
+    def test_production_worker_recipe_keeps_private_database_attachment(self):
+        import yaml
+
+        source = Path(__file__).resolve().parents[2] / "compose.oracle-production.yaml"
+        recipe = yaml.safe_load(source.read_text())
+        service = recipe["services"]["worker"]
+        ca = common.PRODUCTION_DATABASE_CA
+        self.assertEqual(service["networks"], ["worker_egress", "portal_database"])
+        self.assertIn(
+            ca["Source"] + ":" + ca["Destination"] + ":ro", service["volumes"]
+        )
+        self.assertEqual(
+            recipe["networks"]["portal_database"],
+            {"external": True, "name": common.PRODUCTION_DATABASE_NETWORK},
+        )
+
     def test_only_exact_worker_source_and_existing_production_recipe_are_eligible(self):
         binding, plan = inputs()
         self.assertEqual(
@@ -161,6 +181,11 @@ class ContractTests(unittest.TestCase):
             lambda p: p["runtime"].update(port_bindings={"8300/tcp": [{}]}),
             lambda p: p["runtime"]["mounts"][0].update(RW=True),
             lambda p: p["runtime"]["mounts"][0].update(Name="different-volume"),
+            lambda p: p["runtime"].update(networks=["synthetic-private-network"]),
+            lambda p: p["runtime"]["networks"].append("synthetic-extra-network"),
+            lambda p: p["runtime"]["mounts"].pop(1),
+            lambda p: p["runtime"]["mounts"][1].update(RW=True),
+            lambda p: p["runtime"]["mounts"][1].update(Source="/unbound/ca.crt"),
             lambda p: p["recipe"].update(project="onesa-portal-oracle-staging"),
             lambda p: p["recipe"]["files"][0].update(path="/unbound/compose.yaml"),
             lambda p: p["rollback"].update(automatic=True),
