@@ -162,12 +162,43 @@ def profile(row):
         "networks": sorted(row["NetworkSettings"]["Networks"]),
         "mounts": sorted(
             [
-                {k: mount[k] for k in ["Type", "Name", "Source", "Destination", "RW"]}
+                # Docker reports no Name for bind mounts (the database CA).
+                {k: mount.get(k) for k in ["Type", "Name", "Source", "Destination", "RW"]}
                 for mount in row["Mounts"]
             ],
             key=lambda mount: mount["Destination"],
         ),
     }
+
+
+# The production API and worker reach the private PostgreSQL container on the VM
+# only through its internal network, and verify its server certificate against
+# this read-only CA. Both are part of the tracked Compose recipes, so a release
+# that would drop either is refused instead of disconnecting the database.
+PRODUCTION_DATABASE_NETWORK = "onesa-portal-database-production"
+PRODUCTION_DATABASE_CA = {
+    "Type": "bind",
+    "Name": None,
+    "Source": "/etc/onesa/production-databases/portal/server.crt",
+    "Destination": "/run/onesa/portal-db-ca.crt",
+    "RW": False,
+}
+
+
+def production_database_attachment(runtime):
+    """Return the component's own mounts after requiring the exact DB attachment."""
+    own = [mount for mount in runtime["mounts"] if mount != PRODUCTION_DATABASE_CA]
+    r.require(
+        len(runtime["networks"]) == 2
+        and PRODUCTION_DATABASE_NETWORK in runtime["networks"]
+        and len(own) == len(runtime["mounts"]) - 1
+        and all(
+            mount["Destination"] != PRODUCTION_DATABASE_CA["Destination"]
+            for mount in own
+        ),
+        "PRODUCTION_DATABASE_ATTACHMENT_REQUIRED",
+    )
+    return own
 
 
 def configuration(plan, environment):
