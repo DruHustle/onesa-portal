@@ -85,20 +85,6 @@ only `onesa-portal-database-production` and trusts the same read-only CA mount,
 unless the pinned database custody supplies the CA itself. Installing an updated
 recipe or adapter on the VM still follows the protected procedure.
 
-## Production database attachment
-
-Since 22 November 2026 the production API and worker use a private PostgreSQL
-container on the VM instead of Neon. Both tracked production recipes
-(`compose.oracle-backend.yaml` and `compose.oracle-production.yaml`) attach the
-service to the existing internal network `onesa-portal-database-production` and
-mount the database server certificate read-only at `/run/onesa/portal-db-ca.crt`
-for verify-full TLS. Staging is unchanged. The API and worker release adapters
-require exactly that network and CA mount in the preserved runtime profile, so a
-release whose recipe would drop either is refused before any container changes.
-Installing an updated recipe on the VM still follows the protected procedure; the
-identity release adapter keeps its one-network requirement and refuses until it is
-updated for the private database network.
-
 [Open the protected guide](https://docs.internal.onesa.eu/docs/ecosystem/PORTAL_WORKER_RUNTIME).
 Access requires Onesa Identity and permission to read this document.
 
