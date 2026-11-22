@@ -67,8 +67,7 @@ still requires an independently verified off-instance restore. Activation needs
 actual capacity, image/version/TLS checks, restore and restart evidence, one-writer
 maintenance/fencing, and coordinated API/worker/backup configuration through the
 protected procedure. Never promote an external copy because a connection timed out.
-The existing one-network identity/release adapters and other products' databases
-are unchanged. See [the focused tests](BUILD_AND_TEST.md#private-postgresql-target-preparation).
+Other products' databases are unchanged. See [the focused tests](BUILD_AND_TEST.md#private-postgresql-target-preparation).
 
 ## Production database attachment
 
@@ -80,9 +79,11 @@ mount the database server certificate read-only at `/run/onesa/portal-db-ca.crt`
 for verify-full TLS. Staging is unchanged. The API and worker release adapters
 require exactly that network and CA mount in the preserved runtime profile, so a
 release whose recipe would drop either is refused before any container changes.
-Installing an updated recipe on the VM still follows the protected procedure; the
-identity release adapter keeps its one-network requirement and refuses until it is
-updated for the private database network.
+The shared identity release adapter applies the same rule to the production API and
+worker (staging keeps exactly one network). Its production schema migration joins
+only `onesa-portal-database-production` and trusts the same read-only CA mount,
+unless the pinned database custody supplies the CA itself. Installing an updated
+recipe or adapter on the VM still follows the protected procedure.
 
 [Open the protected guide](https://docs.internal.onesa.eu/docs/ecosystem/PORTAL_WORKER_RUNTIME).
 Access requires Onesa Identity and permission to read this document.
