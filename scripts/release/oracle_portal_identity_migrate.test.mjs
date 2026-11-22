@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {rootCertificates} from 'node:tls';
 import {readFile,readdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
-import {additions,connectionScope,migrate,migrateV3,validateRequest,validateState} from './oracle_portal_identity_migrate.mjs';
+import {additions,connectionScope,migrate,migrateV3,mountedDatabaseCA,requestCA,validateRequest,validateState} from './oracle_portal_identity_migrate.mjs';
 
 const directory=fileURLToPath(new URL('../../onesa-portal-backend/migrations/',import.meta.url));
 // Positive fixtures cover the reviewed schema-016 profile. The source tree also
@@ -57,6 +57,49 @@ test('a custody-pinned private CA must be one bounded CA certificate',()=>{
  const trusted=rootCertificates[0],r=request();r.database_ca_pem=trusted;assert.doesNotThrow(()=>validateRequest(r));
  for(const invalid of ['',trusted+trusted, trusted+'\nPRIVATE KEY', 'x'.repeat(8193),42,null]){
   const invalidRequest=request();invalidRequest.database_ca_pem=invalid;assert.throws(()=>validateRequest(invalidRequest),/CA_INVALID/);
+ }
+});
+
+const mounted=()=>({...request(),environment:'production',database_ca_file:mountedDatabaseCA});
+const privateHost=(extra,host='database-internal')=>{
+ const value={...request(),environment:'production',...extra};
+ value.database={...value.database,host};
+ for(const key of ['owner_uri','runtime_uri'])value[key]=value[key].replaceAll('ep-identity.example.test',host);
+ return value;
+};
+
+test('only production may name the one mounted database CA, never beside a custody PEM',()=>{
+ assert.doesNotThrow(()=>validateRequest(mounted()));
+ for(const mutate of [
+  value=>{value.environment='staging';},
+  value=>{value.database_ca_file='/etc/onesa/production-databases/portal/server.crt';},
+  value=>{value.database_ca_file='/run/onesa/../onesa/portal-db-ca.crt';},
+  value=>{value.database_ca_file='';},
+  value=>{value.database_ca_pem=rootCertificates[0];},
+ ]){const value=mounted();mutate(value);assert.throws(()=>validateRequest(value));}
+});
+
+test('the mounted CA is read once and must be one bounded CA certificate',async()=>{
+ const trusted=rootCertificates[0],reads=[];
+ assert.equal(await requestCA(mounted(),async(...args)=>{reads.push(args);return trusted;}),trusted);
+ assert.deepEqual(reads,[[mountedDatabaseCA,'utf8']]);
+ for(const content of ['',trusted+trusted,trusted+'\nPRIVATE KEY','x'.repeat(8193)]){
+  await assert.rejects(requestCA(mounted(),async()=>content),/CA_INVALID/);
+ }
+ await assert.rejects(requestCA(mounted(),async()=>{throw Object.assign(Error('absent'),{code:'ENOENT'});}),/CA_UNAVAILABLE/);
+ await assert.rejects(requestCA({...mounted(),database_ca_file:'/etc/passwd'},async()=>assert.fail('foreign path read')),/CA_INVALID/);
+ const noRead=async()=>assert.fail('no file may be read without a mounted CA');
+ assert.equal(await requestCA({...request(),database_ca_pem:trusted},noRead),trusted);
+ assert.equal(await requestCA(request(),noRead),undefined);
+});
+
+test('a single-label private database host requires a pinned private CA',()=>{
+ assert.doesNotThrow(()=>validateRequest(privateHost({database_ca_file:mountedDatabaseCA})));
+ assert.doesNotThrow(()=>validateRequest(privateHost({database_ca_pem:rootCertificates[0]})));
+ assert.throws(()=>validateRequest(privateHost({})));
+ assert.throws(()=>validateRequest({...privateHost({}),environment:'staging'}));
+ for(const host of ['database_internal','database-internal.','Database-Internal','']){
+  assert.throws(()=>validateRequest(privateHost({database_ca_file:mountedDatabaseCA},host)));
  }
 });
 

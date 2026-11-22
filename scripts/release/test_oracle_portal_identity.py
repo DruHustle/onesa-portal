@@ -17,6 +17,7 @@ import oracle_portal as r
 import oracle_portal_identity as identity
 import oracle_portal_identity_acceptance as acceptance
 import oracle_portal_identity_restore as restore
+import oracle_portal_scanner as common
 import oracle_owner as owner
 import test_oracle_owner as owner_fixtures
 from portal_profile_test_fixtures import schema_016_migrations
@@ -358,6 +359,99 @@ class CustodyTests(unittest.TestCase):
         self.assertEqual(observed[0]["database_ca_pem"], "synthetic-ca-value")
         self.assertNotIn("synthetic-ca-value", json.dumps(writes))
 
+    def migrate(self, env, networks):
+        """Run one inspect migration against a synthetic API with these networks."""
+        self.runs, self.writes = [], []
+        operation = str(uuid4())
+
+        def docker(*args, **kwargs):
+            if args[0] == "inspect":
+                self.assertEqual(args[1], identity.TARGETS[env]["api"])
+                return json.dumps(
+                    [{"NetworkSettings": {"Networks": {name: {} for name in networks}}}]
+                ).encode()
+            self.assertEqual(args[0], "run")
+            self.runs.append((list(args), json.loads(kwargs["data"])))
+            return json.dumps(
+                {
+                    "source_commit": binding()["candidate_commit"],
+                    "operation_id": operation,
+                    "environment": env,
+                    "state": "IDENTITY_SCHEMA_INSPECTED_NOT_AUTHORIZATION",
+                    "credential_changes": 0,
+                    "down_migrations": 0,
+                    "existing_accounts_preserved": True,
+                    "schema_version": 16,
+                }
+            ).encode()
+
+        with patch.object(r, "docker", side_effect=docker), patch.object(
+            r, "write", side_effect=lambda path, value: self.writes.append(path.name)
+        ):
+            return identity.migration(
+                binding(), self.plan, env, operation, {}, "inspect", Path("/synthetic")
+            )
+
+    @staticmethod
+    def option(args, name):
+        return [args[i + 1] for i, value in enumerate(args) if value == name]
+
+    def test_production_migration_joins_only_the_private_database_network(self):
+        self.migrate("production", ["synthetic-api-bridge", common.PRODUCTION_DATABASE_NETWORK])
+        args, request = self.runs[0]
+        ca = common.PRODUCTION_DATABASE_CA
+        self.assertEqual(self.option(args, "--network"), [common.PRODUCTION_DATABASE_NETWORK])
+        self.assertNotIn("synthetic-api-bridge", args)
+        self.assertEqual(
+            self.option(args, "--mount"),
+            ["type=bind,source=" + ca["Source"] + ",target=" + ca["Destination"] + ",readonly"],
+        )
+        self.assertNotIn("-v", args)
+        self.assertNotIn("--volume", args)
+        self.assertEqual(request["database_ca_file"], ca["Destination"])
+        self.assertNotIn("database_ca_pem", request)
+
+    def test_production_custody_ca_replaces_the_mounted_ca(self):
+        pointer = self.plan["environments"]["production"]["database_file"]
+        self.databases[pointer["path"]]["database_ca_pem"] = "synthetic-ca-value"
+        self.migrate("production", [common.PRODUCTION_DATABASE_NETWORK, "synthetic-api-bridge"])
+        args, request = self.runs[0]
+        self.assertEqual(self.option(args, "--network"), [common.PRODUCTION_DATABASE_NETWORK])
+        self.assertEqual(self.option(args, "--mount"), [])
+        self.assertEqual(request["database_ca_pem"], "synthetic-ca-value")
+        self.assertNotIn("database_ca_file", request)
+
+    def test_production_migration_refuses_without_the_exact_database_attachment(self):
+        for networks in [
+            ["synthetic-api-bridge"],
+            [common.PRODUCTION_DATABASE_NETWORK],
+            ["synthetic-api-bridge", "synthetic-foreign-database"],
+            ["synthetic-api-bridge", common.PRODUCTION_DATABASE_NETWORK, "synthetic-extra"],
+            [],
+        ]:
+            with self.subTest(networks=networks):
+                with self.assertRaisesRegex(r.Refused, "IDENTITY_EXISTING_DATABASE_NETWORK_REQUIRED"):
+                    self.migrate("production", networks)
+                # Refused before any intent or migration container.
+                self.assertEqual(self.runs, [])
+                self.assertEqual(self.writes, [])
+
+    def test_staging_migration_keeps_the_single_api_network_without_a_ca_mount(self):
+        self.migrate("staging", ["synthetic-staging-bridge"])
+        args, request = self.runs[0]
+        self.assertEqual(self.option(args, "--network"), ["synthetic-staging-bridge"])
+        self.assertEqual(self.option(args, "--mount"), [])
+        self.assertNotIn("database_ca_file", request)
+        for networks in [
+            ["synthetic-staging-bridge", common.PRODUCTION_DATABASE_NETWORK],
+            [common.PRODUCTION_DATABASE_NETWORK, "synthetic-api-bridge"],
+            [],
+        ]:
+            with self.subTest(networks=networks):
+                with self.assertRaisesRegex(r.Refused, "IDENTITY_EXISTING_DATABASE_NETWORK_REQUIRED"):
+                    self.migrate("staging", networks)
+                self.assertEqual(self.runs, [])
+
     def test_runtime_ca_must_match_pinned_custody_for_api_and_worker(self):
         stage = self.plan["environments"]["staging"]
         self.databases[stage["database_file"]["path"]]["database_ca_pem"] = "synthetic-ca"
@@ -406,6 +500,163 @@ class CustodyTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(r.Refused, "DATABASE_MUST_BE_ISOLATED"):
             identity.validate_custody(self.plan)
+
+
+def container(name, kind="api", networks=("synthetic-bridge",), mounts=()):
+    """A synthetic restricted Portal container as `docker inspect` reports it."""
+    return {
+        "Id": hashlib.sha256(name.encode()).hexdigest(),
+        "Name": "/" + name,
+        "Image": "sha256:" + "3" * 64,
+        "RestartCount": 0,
+        "State": {"StartedAt": "2026-11-22T00:00:00Z"},
+        "Config": {
+            "Hostname": name,
+            "Image": "synthetic",
+            "User": "node",
+            "Entrypoint": ["docker-entrypoint.sh"],
+            "Cmd": ["node", "dist/src/server.js" if kind == "api" else "dist/src/jobs/worker.js"],
+            "Env": ["SYNTHETIC=never-output"],
+            "Labels": {"org.onesa.source-commit": "f" * 40},
+            "Healthcheck": None,
+        },
+        "HostConfig": {
+            "AutoRemove": False,
+            "ReadonlyRootfs": True,
+            "Privileged": False,
+            "CapAdd": None,
+            "CapDrop": ["ALL"],
+            "SecurityOpt": ["no-new-privileges:true"],
+            "GroupAdd": None,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "PidsLimit": 128,
+            "RestartPolicy": {"Name": "unless-stopped"},
+            "Init": True,
+            "Tmpfs": {"/tmp": ""},
+            "PortBindings": {},
+            "NetworkMode": "synthetic",
+        },
+        "Mounts": [copy.deepcopy(mount) for mount in mounts],
+        "NetworkSettings": {
+            "Networks": {network: {"NetworkID": "d" * 64} for network in networks}
+        },
+    }
+
+
+# Docker reports bind mounts without a Name.
+CA_BIND = {
+    "Type": "bind",
+    "Source": common.PRODUCTION_DATABASE_CA["Source"],
+    "Destination": common.PRODUCTION_DATABASE_CA["Destination"],
+    "Mode": "ro",
+    "RW": False,
+    "Propagation": "rprivate",
+}
+
+
+class RuntimeAttachmentTests(unittest.TestCase):
+    """preserved(): staging keeps one network; production adds only the database."""
+
+    def setUp(self):
+        self.build()
+        self.enterContext(
+            patch.object(r, "inventory", side_effect=lambda: copy.deepcopy(self.rows))
+        )
+
+    def build(self):
+        self.value, self.plan = inputs()
+        self.rows = {name: container(name) for name in self.plan["baseline"]}
+        for env in identity.ENVIRONMENTS:
+            for kind, name in identity.TARGETS[env].items():
+                own = {
+                    "Type": "volume",
+                    "Name": "synthetic-" + env + "-" + kind,
+                    "Source": "/var/lib/docker/volumes/synthetic/_data",
+                    "Destination": "/app/storage" if kind == "api" else "/run/onesa-scanner",
+                    "RW": kind == "api",
+                }
+                bridge = "synthetic-" + env + "-" + kind + "-bridge"
+                if env == "production":
+                    networks = [bridge, common.PRODUCTION_DATABASE_NETWORK]
+                    mounts = [own, CA_BIND]
+                else:
+                    networks, mounts = [bridge], [own]
+                self.rows[name] = container(name, kind, networks, mounts)
+        self.seal()
+
+    def seal(self):
+        # Re-pin the plan to the changed shape, so only the attachment rule can refuse.
+        for name, row in self.rows.items():
+            self.plan["baseline"][name] = r.summary(row)
+        for env in identity.ENVIRONMENTS:
+            for kind, name in identity.TARGETS[env].items():
+                self.plan["environments"][env][kind]["profile_sha256"] = identity.digest(
+                    identity.stable_profile(self.rows[name])
+                )
+
+    def test_live_private_database_attachment_is_accepted(self):
+        rows = identity.preserved(self.plan)
+        self.assertEqual(set(rows), set(self.plan["baseline"]))
+
+    def test_production_targets_refuse_without_the_exact_database_attachment(self):
+        def networks(row):
+            return row["NetworkSettings"]["Networks"]
+
+        def ca(row):
+            return next(m for m in row["Mounts"] if m["Type"] == "bind")
+
+        mutations = {
+            "database network missing": lambda row: networks(row).pop(
+                common.PRODUCTION_DATABASE_NETWORK
+            ),
+            "only the database network": lambda row: [
+                networks(row).pop(name)
+                for name in list(networks(row))
+                if name != common.PRODUCTION_DATABASE_NETWORK
+            ],
+            "foreign database network": lambda row: networks(row).update(
+                {"synthetic-foreign-database": networks(row).pop(common.PRODUCTION_DATABASE_NETWORK)}
+            ),
+            "extra network": lambda row: networks(row).update(
+                {"synthetic-extra": {"NetworkID": "e" * 64}}
+            ),
+            "CA missing": lambda row: row["Mounts"].remove(ca(row)),
+            "CA writable": lambda row: ca(row).update(RW=True),
+            "CA from another file": lambda row: ca(row).update(Source="/tmp/synthetic.crt"),
+            "CA at another path": lambda row: ca(row).update(Destination="/run/synthetic.crt"),
+            "CA twice": lambda row: row["Mounts"].append(dict(CA_BIND, Source="/tmp/other.crt")),
+        }
+        for kind, name in identity.TARGETS["production"].items():
+            for label, mutate in mutations.items():
+                with self.subTest(kind=kind, mutation=label):
+                    self.build()
+                    mutate(self.rows[name])
+                    self.seal()
+                    with self.assertRaisesRegex(
+                        r.Refused, "PRODUCTION_DATABASE_ATTACHMENT_REQUIRED"
+                    ):
+                        identity.preserved(self.plan)
+
+    def test_staging_targets_keep_exactly_one_network(self):
+        for kind, name in identity.TARGETS["staging"].items():
+            for extra in [common.PRODUCTION_DATABASE_NETWORK, "synthetic-extra"]:
+                with self.subTest(kind=kind, extra=extra):
+                    self.build()
+                    self.rows[name]["NetworkSettings"]["Networks"][extra] = {
+                        "NetworkID": "e" * 64
+                    }
+                    self.seal()
+                    with self.assertRaisesRegex(
+                        r.Refused, "IDENTITY_EXISTING_RESTRICTED_RUNTIME_REQUIRED"
+                    ):
+                        identity.preserved(self.plan)
+
+    def test_unsealed_network_change_is_still_a_profile_change(self):
+        name = identity.TARGETS["production"]["api"]
+        self.rows[name]["NetworkSettings"]["Networks"].pop(common.PRODUCTION_DATABASE_NETWORK)
+        with self.assertRaisesRegex(r.Refused, "IDENTITY_RUNTIME_PROFILE_CHANGED"):
+            identity.preserved(self.plan)
 
 
 class OperationTests(unittest.TestCase):
