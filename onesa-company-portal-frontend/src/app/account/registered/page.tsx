@@ -10,11 +10,13 @@ export default async function Registered({ searchParams }: { searchParams: Promi
     <RegistrationReturn audience={admin ? "admin" : "user"}/>
     <h1 id="return-title">Company Portal</h1>
     {admin ? <>
-      <p>Administrator access requires approval. Once approved, sign in to open the staff workspace.</p>
-      <a href="/admin#workspace">Sign in to the staff workspace</a>
+      <p>Company Portal administrator access requires approval. Once approved, sign in to open the staff workspace.</p>
+      <a href={process.env.ONESA_IDENTITY_PORTAL_LOGIN === "managed"
+        ? "/api/v1/auth/managed/start?next=%2Fadmin"
+        : "/admin#workspace"}>Sign in to the staff workspace</a>
     </> : <>
-      <p>You have returned to Company Portal from Onesa Identity.</p>
-      <a href="/account">Open my Onesa account</a>
+      <p>Company Portal access requires approval. If you requested access, your Onesa administrator will review it.</p>
+      <p><a href="/account">Manage your Onesa account</a></p>
     </>}
     <p><a href="/en">Visit the Onesa company website</a></p>
   </section></main>;
