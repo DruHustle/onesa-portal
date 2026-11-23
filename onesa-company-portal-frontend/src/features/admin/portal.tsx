@@ -228,7 +228,16 @@ export function AdminPortal({
           setCsrf(r.data.csrf);
         }
       })
-      .catch(error => {if(sessionRequest.signal.aborted)return;if(error instanceof ApiError&&error.status===401){window.location.replace(signIn);return;}setSessionError(error instanceof ApiError&&error.status===403?'Access to this Portal session was denied. Use an approved account.':'We could not check your Portal session. The service may be unavailable; retry the session check or sign in when it recovers.');})
+      .catch(error => {
+        if (sessionRequest.signal.aborted) return;
+        if (error instanceof ApiError && error.status === 401) {
+          if (!managedLogin) window.location.replace(signIn);
+          return;
+        }
+        setSessionError(error instanceof ApiError && error.status === 403
+          ? "Access to this Portal session was denied. Use an approved account."
+          : "We could not check your Portal session. The service may be unavailable. Retry the session check or sign in when it recovers.");
+      })
       .finally(() => {if(!sessionRequest.signal.aborted){setLoading(false);setSessionChecking(false);}});
     return()=>sessionRequest.abort();
   }, [sessionAttempt]);
@@ -482,7 +491,8 @@ export function AdminPortal({
         <div className="admin-login">
           <h1 style={{ fontSize: "2rem" }}>Sign in</h1>
           {sessionError&&<div role="alert"><p>{sessionError}</p><button type="button" disabled={sessionChecking} onClick={()=>setSessionAttempt(value=>value+1)}>Retry session check</button></div>}{sessionChecking&&<p role="status">Checking your Portal session…</p>}
-          <p><a className="button" href={accountEntry}>Continue with Onesa</a></p>
+          <p><a className="button" href={accountEntry}>{managedLogin ? "Sign in with Onesa" : "Continue with Onesa"}</a></p>
+          {managedLogin && <p><a href="/account/register?next=/admin">Request administrator access</a></p>}
           {recovery.length > 0 && (
             <div className="admin-notice">
               <p>Save these one-use recovery codes securely:</p>

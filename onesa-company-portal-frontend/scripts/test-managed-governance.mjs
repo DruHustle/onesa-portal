@@ -14,6 +14,8 @@ const target = "00000000-0000-4000-8000-000000000001";
 const challenges = new Map();
 const requests = [];
 const providerStates = new Map();
+const signInStates = new Map();
+let signedIn = true;
 const api = http.createServer(async (req, res) => {
   const url = new URL(req.url, origin);
   const json = (data, status = 200, headers = {}) => {
@@ -21,7 +23,17 @@ const api = http.createServer(async (req, res) => {
     res.end(JSON.stringify(data));
   };
   const redirect = location => { res.writeHead(302, { location }); res.end(); };
-  if (url.pathname === "/api/v1/auth/me") return json({ user: { id: target, role: "owner", email: "member@example.invalid" }, csrf: "synthetic-csrf" });
+  if (url.pathname === "/api/v1/auth/me") return signedIn
+    ? json({ user: { id: target, role: "owner", email: "member@example.invalid" }, csrf: "synthetic-csrf" })
+    : json({ error: { code: "AUTHENTICATION_REQUIRED" } }, 401);
+  if (url.pathname === "/api/v1/auth/managed/start") {
+    const next = url.searchParams.get("next");
+    assert.ok(next === "/admin" || next?.startsWith("/admin#"));
+    const state = randomBytes(24).toString("hex");
+    signInStates.set(state, next);
+    res.writeHead(303, { location: issuer + "authorize?state=" + state });
+    return res.end();
+  }
   if (url.pathname === "/api/v1/admin/governance/overview") return json({ restrictions: [], upcomingReviews: 0 });
   if (url.pathname === "/api/v1/admin/governance/requests" || (url.pathname === "/api/v1/admin/governance/holds" && req.method === "GET"))
     return json({ items: [], page: 1, total: 0 });
@@ -57,8 +69,14 @@ const api = http.createServer(async (req, res) => {
     return res.end();
   }
   if (url.pathname === "/api/v1/auth/managed/callback") {
-    const item = challenges.get(providerStates.get(url.searchParams.get("state")));
     const state = url.searchParams.get("state");
+    if (signInStates.has(state)) {
+      const next = signInStates.get(state);
+      signInStates.delete(state);
+      signedIn = true;
+      return redirect(next);
+    }
+    const item = challenges.get(providerStates.get(state));
     if (!item || !req.headers.cookie?.split("; ").includes("fixture-" + state + "=started")) return json({ error: { code: "STATE" } }, 400);
     item.verified = true;
     return redirect("/admin/step-up-complete");
@@ -125,10 +143,38 @@ try {
       assert.equal(registrations.at(-1),audience);
       if (expected.startsWith("/account/registered")) {
         await expect(page.getByRole("heading", {name:"Company Portal"})).toBeVisible();
-        const label = audience === "admin" ? "Sign in to the staff workspace" : "Open my Onesa account";
-        await expect(page.getByRole("link", {name:label})).toHaveAttribute("href", audience === "admin" ? "/admin#workspace" : "/account");
+        await expect(page.getByText("Company Portal " + (audience === "admin" ? "administrator " : "") + "access requires approval.", {exact:false})).toBeVisible();
+        const label = audience === "admin" ? "Sign in to the staff workspace" : "Manage your Onesa account";
+        await expect(page.getByRole("link", {name:label})).toHaveAttribute("href", audience === "admin" ? "/api/v1/auth/managed/start?next=%2Fadmin" : "/account");
       }
     }
+    signedIn = false;
+    await page.goto(origin + "/admin#privacy/requests");
+    const signIn = page.getByRole("link", {name:"Sign in with Onesa"});
+    await expect(signIn).toBeVisible();
+    await expect(page.getByRole("link", {name:"Request administrator access"})).toBeVisible();
+    await expect(page).toHaveURL(origin + "/admin#privacy/requests");
+    const loginStart = "/api/v1/auth/managed/start";
+    await expect(signIn).toHaveAttribute("href", loginStart + "?next=%2Fadmin%23privacy%2Frequests");
+    let started;
+    await context.route(url => url.origin === origin && url.pathname === loginStart, async route => {
+      started = await route.fetch({maxRedirects:0});
+      // Read the Portal proxy's redirect directly. WebKit may omit a
+      // page response event once the mock issuer intercepts its navigation.
+      await route.fulfill({status:200, contentType:"text/html", body:"<title>Synthetic Portal sign-in</title>"});
+    }, {times:1});
+    await signIn.click();
+    await expect(page).toHaveTitle("Synthetic Portal sign-in");
+    assert.ok(started);
+    assert.equal(started.status(), 303);
+    const authorize = new URL(started.headers().location);
+    assert.equal(authorize.origin, new URL(issuer).origin);
+    assert.equal(authorize.pathname, "/authorize");
+    // Follow the app's issued redirect as a new navigation so Playwright can
+    // serve the synthetic issuer without an external network request.
+    await page.goto(authorize.href);
+    await page.getByRole("link", {name:"Confirm synthetic verification"}).click();
+    await expect(page).toHaveURL(origin + "/admin#privacy/requests");
     const seenUrls = [];
     context.on("request", request => seenUrls.push(request.url()));
     await page.goto(origin + "/admin#privacy/requests");
