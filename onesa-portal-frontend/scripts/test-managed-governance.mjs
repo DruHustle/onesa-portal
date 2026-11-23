@@ -195,11 +195,14 @@ try {
       assert.equal(logoutRequests, beforeLogout + 1);
       assert.equal(route.request().isNavigationRequest(), true);
       providerVisits += 1;
-      await route.fulfill({ status: 302, headers: { location: origin + "/en" } });
+      await route.fulfill({ contentType: "text/html", body:
+        '<a href="' + origin + '/en">Return after synthetic sign-out</a>' });
     });
     logoutDestination = logoutUrl.href;
     await logoutPage.goto(origin + "/admin");
     await logoutPage.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(logoutPage).toHaveURL(logoutUrl.href);
+    await logoutPage.getByRole("link", { name: "Return after synthetic sign-out" }).click();
     await expect(logoutPage).toHaveURL(origin + "/en");
     assert.equal(providerVisits, 1);
     logoutUrl.searchParams.set("post_logout_redirect_uri", "https://outside.example.invalid/");
