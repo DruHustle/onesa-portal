@@ -22,6 +22,9 @@ for (const [publicPath, section] of [
   assert.ok(overviewHtml.includes(`href="${publicPath}"`), publicPath);
   assert.match(overviewHtml, new RegExp(`href="[^"]+section%3D${section}"`));
 }
+assert.match(overviewHtml, /<h2>Staff and access<\/h2>/);
+assert.match(overviewHtml, /href="[^"]+section%3DUsers"/);
+assert.equal((overviewHtml.match(/<dt>Example<\/dt>/g) ?? []).length, 4);
 assert.ok(overviewHtml.includes('href="/account"'));
 assert.ok(overviewHtml.includes('href="/account/register"'));
 assert.doesNotMatch(overviewHtml, /<form|\/api\/v1\/auth\/me/);

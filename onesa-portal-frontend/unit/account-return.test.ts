@@ -95,6 +95,32 @@ test("managed redirects remain bound to the configured provider and Portal callb
     assert.equal(managedPortalRedirect(start,url,origin,issuer),null);
 });
 
+test("managed Portal logout accepts only its configured Auth0 endpoint and fixed public return", async () => {
+  const { managedPortalLogoutRedirect } = await import("../src/lib/managed-portal-redirect.ts");
+  const origin = "https://portal.example", issuer = "https://auth.example/";
+  const query = new URLSearchParams({
+    client_id: "portal-web",
+    post_logout_redirect_uri: origin + "/en",
+  });
+  const logout = issuer + "oidc/logout?" + query;
+  assert.equal(managedPortalLogoutRedirect(logout, origin, issuer), logout);
+  for (const unsafe of [
+    null,
+    "/oidc/logout?" + query,
+    logout.replace("https:", "http:"),
+    logout.replace("auth.example", "other.example"),
+    logout.replace("auth.example", "someone@auth.example"),
+    logout.replace("/oidc/logout", "/authorize"),
+    logout.replace("%2Fen", "%2Fadmin"),
+    logout.replace("client_id=portal-web", "client_id="),
+    logout + "&client_id=duplicate",
+    logout + "&id_token_hint=unexpected",
+    logout + "#fragment",
+  ]) assert.equal(managedPortalLogoutRedirect(unsafe, origin, issuer), null);
+  assert.equal(managedPortalLogoutRedirect(logout, origin), null);
+  assert.equal(managedPortalLogoutRedirect(logout, origin, "https://auth.example/extra"), null);
+});
+
 test("managed operation start and completion accept only their configured destinations", async () => {
   const { managedPortalRedirect } = await import("../src/lib/managed-portal-redirect.ts");
   const origin = "https://portal.example", issuer = "https://auth.example/";

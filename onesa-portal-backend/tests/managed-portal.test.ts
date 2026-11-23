@@ -17,6 +17,7 @@ test("managed Portal callback verifies the signed grant and keeps an existing ed
     PUBLIC_ORIGIN: origin,
     SESSION_KEY: randomUUID() + randomUUID(),
     ONESA_IDENTITY_PORTAL_LOGIN: "managed",
+    ONESA_IDENTITY_PORTAL_LOGOUT_ENABLED: "false",
     ONESA_IDENTITY_ADMINISTRATION: "external",
     ONESA_IDENTITY_ISSUER: issuer,
     ONESA_IDENTITY_PORTAL_AUDIENCE: audience,
@@ -471,6 +472,43 @@ test("managed Portal callback verifies the signed grant and keeps an existing ed
     });
     assert.equal(who.json().user.id, signedUser);
     assert.equal(who.json().user.role, "administrator");
+    for (const useProviderLogout of [false, true]) {
+      const signedForLogout = await app.inject(await start());
+      assert.equal(signedForLogout.headers.location, target);
+      const logoutCookie = cookies(signedForLogout);
+      const logoutSession = await app.inject({ url: "/api/v1/auth/me", headers: { cookie: logoutCookie } });
+      assert.equal(logoutSession.statusCode, 200);
+      const logoutHeaders = { cookie: logoutCookie, origin, "x-csrf-token": logoutSession.json().csrf };
+      const requestLogout = (headers = logoutHeaders) => app.inject({
+        method: "POST", url: "/api/v1/auth/logout", payload: {}, headers,
+      });
+      process.env.ONESA_IDENTITY_PORTAL_LOGOUT_ENABLED = String(useProviderLogout);
+      offline = true;
+      try {
+        assert.equal((await requestLogout({ ...logoutHeaders, origin: "https://other.example.test" })).statusCode, 403);
+        assert.equal((await requestLogout({ ...logoutHeaders, "x-csrf-token": "invalid" })).statusCode, 403);
+        const logout = await requestLogout();
+        assert.equal(logout.statusCode, 200, logout.body);
+        assert.equal(logout.cookies.find((item) => item.name === "onesa_session")?.value, "");
+        assert.equal((await app.inject({ url: "/api/v1/auth/me", headers: { cookie: logoutCookie } })).statusCode, 401);
+        assert.deepEqual(logout.json(), { ok: true });
+        const logoutUrl = logout.headers["x-onesa-logout-url"];
+        if (useProviderLogout) {
+          assert(typeof logoutUrl === "string");
+          const destination = new URL(logoutUrl);
+          assert.equal(destination.origin + destination.pathname, issuer + "oidc/logout");
+          assert.deepEqual(Object.fromEntries(destination.searchParams), {
+            client_id: clientId, post_logout_redirect_uri: origin + "/en",
+          });
+        } else {
+          assert.equal(logoutUrl, undefined);
+        }
+      } finally {
+        offline = false;
+        process.env.ONESA_IDENTITY_PORTAL_LOGOUT_ENABLED = "false";
+      }
+    }
+    assert.equal((await app.inject({ url: "/api/v1/auth/me", headers: { cookie: cookies(firstStaffSignIn) } })).statusCode, 200);
     assert.equal((await app.inject(await start())).headers.location, target);
     assert.equal(
       (
