@@ -518,10 +518,13 @@ export function AdminPortal({
           onClick={() =>
             navigate(() => {
               void perform(async () => {
-                await api.POST("/api/v1/auth/logout", { body: {} });
+                const result = await api.POST("/api/v1/auth/logout", { body: {} });
                 setCsrf(undefined);
                 setUser(null);
-                window.location.replace(managedLogin ? "/en" : "/account?next=/admin");
+                const destination = managedLogin
+                  ? result.response.headers.get("x-onesa-logout-url") ?? "/en"
+                  : "/account?next=/admin";
+                window.location.replace(destination);
               });
             })
           }

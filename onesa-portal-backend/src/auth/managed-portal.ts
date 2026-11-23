@@ -97,6 +97,17 @@ export function managedConfig() {
 }
 
 export type PortalOIDCConfig = ReturnType<typeof managedConfig>;
+
+export function managedPortalLogoutUrl(config: PortalOIDCConfig | undefined, sessionIssuer?: string | null) {
+  if (!config || sessionIssuer !== config.issuer || process.env.ONESA_IDENTITY_PORTAL_LOGOUT_ENABLED !== "true")
+    return undefined;
+  // The browser ends the provider session after Portal has revoked its own.
+  const destination = new URL("/oidc/logout", config.issuer);
+  destination.searchParams.set("client_id", config.clientId);
+  destination.searchParams.set("post_logout_redirect_uri", new URL("/en", config.callback).href);
+  return destination.href;
+}
+
 type Flow = {
   state: string;
   nonce: string;
