@@ -276,6 +276,40 @@ class PlanTests(unittest.TestCase):
         with self.assertRaisesRegex(r.Refused, "SCANNER_AMBIGUOUS_BIND_CONFIGURATION"):
             scanner.profile(row)
 
+    def test_bind_mounted_database_ca_profiles_without_volume_name(self):
+        # Docker reports no Name for bind mounts; the production API and worker
+        # bind the private database CA, so profiling them must not fail.
+        row = {
+            "Config": {"Env": [], "User": "node", "Entrypoint": None, "Cmd": None,
+                       "Healthcheck": {}},
+            "HostConfig": {
+                "ReadonlyRootfs": True, "Privileged": False, "CapAdd": None,
+                "CapDrop": ["ALL"], "SecurityOpt": [], "GroupAdd": None, "Memory": 1,
+                "NanoCpus": 1, "PidsLimit": 128, "RestartPolicy": {}, "Init": True,
+                "Tmpfs": {}, "PortBindings": {}, "NetworkMode": "network",
+                "Binds": [
+                    "synthetic-storage:/app/storage:rw",
+                    scanner.PRODUCTION_DATABASE_CA["Source"] + ":"
+                    + scanner.PRODUCTION_DATABASE_CA["Destination"] + ":ro",
+                ],
+            },
+            "NetworkSettings": {"Networks": {
+                "network": {}, scanner.PRODUCTION_DATABASE_NETWORK: {}}},
+            "Mounts": [
+                {"Type": "bind", "Source": scanner.PRODUCTION_DATABASE_CA["Source"],
+                 "Destination": scanner.PRODUCTION_DATABASE_CA["Destination"],
+                 "Mode": "ro", "RW": False, "Propagation": "rprivate"},
+                {"Type": "volume", "Name": "synthetic-storage",
+                 "Source": "/synthetic/_data", "Destination": "/app/storage",
+                 "Driver": "local", "Mode": "rw", "RW": True, "Propagation": ""},
+            ],
+        }
+        value = scanner.profile(row)
+        self.assertEqual(value["mounts"][1], scanner.PRODUCTION_DATABASE_CA)
+        self.assertEqual(
+            scanner.production_database_attachment(value), [value["mounts"][0]]
+        )
+
 
 class SignedScannerContextTests(unittest.TestCase):
     component = "scanner"
