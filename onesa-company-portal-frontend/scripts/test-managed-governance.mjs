@@ -154,9 +154,18 @@ try {
     await expect(signIn).toBeVisible();
     await expect(page.getByRole("link", {name:"Request administrator access"})).toBeVisible();
     await expect(page).toHaveURL(origin + "/admin#privacy/requests");
-    const start = page.waitForResponse(response => new URL(response.url()).pathname === "/api/v1/auth/managed/start");
+    const loginStart = "/api/v1/auth/managed/start";
+    await expect(signIn).toHaveAttribute("href", loginStart + "?next=%2Fadmin%23privacy%2Frequests");
+    let started;
+    await context.route(url => url.origin === origin && url.pathname === loginStart, async route => {
+      started = await route.fetch({maxRedirects:0});
+      // Read the Portal proxy's redirect directly. WebKit may omit a
+      // page response event once the mock issuer intercepts its navigation.
+      await route.fulfill({status:200, contentType:"text/html", body:"<title>Synthetic Portal sign-in</title>"});
+    }, {times:1});
     await signIn.click();
-    const started = await start;
+    await expect(page).toHaveTitle("Synthetic Portal sign-in");
+    assert.ok(started);
     assert.equal(started.status(), 303);
     const authorize = new URL(started.headers().location);
     assert.equal(authorize.origin, new URL(issuer).origin);
