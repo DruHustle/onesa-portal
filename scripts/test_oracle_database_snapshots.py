@@ -89,6 +89,44 @@ class SnapshotSafety(unittest.TestCase):
             self.assertEqual(commands, ["run", "rm"])
             self.assertEqual(list(state.iterdir()), [])
 
+    def test_private_postgres_profile_change_during_upload_preserves_receipt(self):
+        config = {"schema": 1, "products": {"ai": {"private_postgres": {}}}}
+        active_config = config
+        uri = urlsplit("postgresql://reader:fixture@private.invalid/production?sslmode=verify-full")
+        binding = {"network_id": "a" * 64, "ca": b"synthetic CA"}
+
+        def read_profile(path):
+            if path == snapshots.CONFIG:
+                return active_config
+            return {"image": "onesa-portal-worker:" + "a" * 40}
+
+        def upload(command, **kwargs):
+            nonlocal active_config
+            active_config = {"schema": 1, "products": {"ai": {}}}
+            payload = json.loads(kwargs["input"])
+            receipt = {"passed": True, "product": "ai", "id": payload["id"]}
+            return subprocess.CompletedProcess(command, 0, json.dumps(receipt).encode(), b"")
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            success = state / "database-backup-ai-success.json"
+            previous_receipt = '{"id":"prior-snapshot"}\n'
+            success.write_text(previous_receipt)
+            with (
+                patch.object(snapshots.os, "geteuid", return_value=0),
+                patch.object(snapshots, "STATE", state),
+                patch.object(snapshots, "private_json", side_effect=read_profile),
+                patch.object(snapshots, "settings_for", return_value=({}, uri)),
+                patch.object(snapshots, "private_postgres_binding", return_value=binding),
+                patch.object(snapshots, "pg_snapshot", return_value=(b"synthetic dump", [])),
+                patch.object(snapshots.backup, "checked_env"),
+                patch.object(snapshots.subprocess, "run", side_effect=upload) as transport,
+            ):
+                with self.assertRaisesRegex(ValueError, "Private PostgreSQL snapshot profile changed"):
+                    snapshots.main("ai")
+            transport.assert_called_once()
+            self.assertEqual(success.read_text(), previous_receipt)
+
     def test_robot_rejects_other_environment_before_network(self):
         from urllib.parse import urlsplit
 

@@ -384,14 +384,22 @@ def main(product):
     with (STATE / ("database-backup-" + product + ".lock")).open("w") as lock:
         os.chmod(lock.name, 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        binding = private_postgres_binding(profile["private_postgres"]) if private_postgres else None
-        dump, manifest = (pg_snapshot(uri, binding=binding) if product == "ai"
-                          else robot_snapshot(values, uri))
-        if binding:
+        binding = (
+            private_postgres_binding(profile["private_postgres"]) if private_postgres else None
+        )
+
+        def verify_current_binding():
+            if binding is None:
+                return
             if private_json(CONFIG) != config or settings_for(product, config)[1] != uri:
                 raise ValueError("Private PostgreSQL snapshot profile changed")
             if private_postgres_binding(profile["private_postgres"]) != binding:
                 raise ValueError("Private PostgreSQL snapshot resources changed")
+
+        dump, manifest = (
+            pg_snapshot(uri, binding=binding) if product == "ai" else robot_snapshot(values, uri)
+        )
+        verify_current_binding()
         backup.checked_env()
         transport = private_json(Path("/etc/onesa/operations.json"))["image"]
         if not re.fullmatch(r"onesa-portal-worker:[a-f0-9]{40}", transport):
@@ -450,6 +458,8 @@ def main(product):
             or receipt["id"] != payload["id"]
         ):
             raise ValueError("Backup verification failed")
+        # A cutover can occur during upload and readback. Retain the prior receipt.
+        verify_current_binding()
         receipt.update(
             verified_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
             consistent_snapshot=True,
