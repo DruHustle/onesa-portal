@@ -244,3 +244,51 @@ test('invalid, oversized, redirected and unknown PasoFi capacity responses fail 
     }finally{globalThis.fetch=original;}
   }
 });
+
+// Regression: the served browser script once contained `…length,const unknown=…`,
+// a SyntaxError that left the live status panel on "Loading service checks…"
+// forever. Node tests of the Worker module alone never parsed that string.
+async function runDashboardScript(statusPayload, {fail = false} = {}) {
+  const {Script, createContext} = await import('node:vm');
+  const response = await worker.fetch(new Request(base + '/dashboard.js'));
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /^text\/javascript/);
+  const source = await response.text();
+  const script = new Script(source, {filename: 'dashboard.js'});
+  const element = () => ({innerHTML: '', textContent: '', disabled: false, listeners: {},
+    addEventListener(type, fn) { this.listeners[type] = fn; }});
+  const nodes = {'#status-grid': element(), '#status-summary': element(), '#refresh-status': element()};
+  const timers = [];
+  const context = createContext({
+    document: {querySelector: selector => nodes[selector] ?? null},
+    fetch: async () => fail
+      ? new Response('nope', {status: 502})
+      : Response.json(statusPayload),
+    setInterval: (fn, ms) => { timers.push(ms); return timers.length; },
+    Date, String, Error, JSON, Promise,
+  });
+  script.runInContext(context);
+  for (let i = 0; i < 20 && nodes['#refresh-status'].textContent !== 'Refresh'; i++)
+    await new Promise(resolve => setImmediate(resolve));
+  return {nodes, timers};
+}
+
+test('served dashboard script parses and renders the status summary', async () => {
+  const payload = {checkedAt: '2026-11-22T00:00:00.000Z', services: [
+    {name: 'Onesa Account', state: 'ok', label: 'Identity ready', detail: 'ok', url: 'https://account.onesa.eu', recovery: 'https://account.onesa.eu'},
+    {name: 'Smart Factory', state: 'unknown', label: 'HTTP reachable', detail: 'unverified', url: 'https://factory.onesa.eu', recovery: 'https://factory.onesa.eu'},
+    {name: '<img src=x onerror=alert(1)>', state: 'bad', label: 'HTTP 503', detail: 'down', url: 'https://portal.onesa.eu', recovery: 'https://portal.onesa.eu'},
+  ]};
+  const {nodes, timers} = await runDashboardScript(payload);
+  assert.match(nodes['#status-summary'].textContent, /^1 verified ready · 1 reachability-only \/ unknown · 1 HTTP failures · /);
+  assert.equal((nodes['#status-grid'].innerHTML.match(/class="status-card"/g) || []).length, 3);
+  assert.doesNotMatch(nodes['#status-grid'].innerHTML, /<img/, 'service fields must be HTML-escaped');
+  assert.equal(nodes['#refresh-status'].disabled, false);
+  assert.deepEqual(timers, [60000]);
+});
+
+test('served dashboard script reports an unavailable status endpoint instead of loading forever', async () => {
+  const {nodes} = await runDashboardScript(null, {fail: true});
+  assert.equal(nodes['#status-summary'].textContent, 'Status check unavailable');
+  assert.doesNotMatch(nodes['#status-grid'].innerHTML, /Loading service checks/);
+});
