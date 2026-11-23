@@ -14,6 +14,8 @@ const target = "00000000-0000-4000-8000-000000000001";
 const challenges = new Map();
 const requests = [];
 const providerStates = new Map();
+let logoutDestination;
+let logoutRequests = 0;
 const api = http.createServer(async (req, res) => {
   const url = new URL(req.url, origin);
   const json = (data, status = 200, headers = {}) => {
@@ -22,6 +24,12 @@ const api = http.createServer(async (req, res) => {
   };
   const redirect = location => { res.writeHead(302, { location }); res.end(); };
   if (url.pathname === "/api/v1/auth/me") return json({ user: { id: target, role: "owner", email: "member@example.invalid" }, csrf: "synthetic-csrf" });
+  if (url.pathname === "/api/v1/auth/logout" && req.method === "POST") {
+    if (req.headers.origin !== origin || req.headers["x-csrf-token"] !== "synthetic-csrf")
+      return json({ error: { code: "CSRF", message: "Refresh the session." } }, 403);
+    logoutRequests += 1;
+    return json({ ok: true }, 200, { "x-onesa-logout-url": logoutDestination });
+  }
   if (url.pathname === "/api/v1/admin/governance/overview") return json({ restrictions: [], upcomingReviews: 0 });
   if (url.pathname === "/api/v1/admin/governance/requests" || (url.pathname === "/api/v1/admin/governance/holds" && req.method === "GET"))
     return json({ items: [], page: 1, total: 0 });
@@ -177,10 +185,34 @@ try {
     for (const request of requests.slice(initial)) {
       if (request.stepUp.receipt) assert(seenUrls.every(url => !url.includes(request.stepUp.receipt)));
     }
+    const logoutPage = await context.newPage();
+    const logoutUrl = new URL("oidc/logout", issuer);
+    logoutUrl.searchParams.set("client_id", "portal-web");
+    logoutUrl.searchParams.set("post_logout_redirect_uri", origin + "/en");
+    let providerVisits = 0;
+    const beforeLogout = logoutRequests;
+    await context.route(logoutUrl.href, async route => {
+      assert.equal(logoutRequests, beforeLogout + 1);
+      assert.equal(route.request().isNavigationRequest(), true);
+      providerVisits += 1;
+      await route.fulfill({ status: 302, headers: { location: origin + "/en" } });
+    });
+    logoutDestination = logoutUrl.href;
+    await logoutPage.goto(origin + "/admin");
+    await logoutPage.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(logoutPage).toHaveURL(origin + "/en");
+    assert.equal(providerVisits, 1);
+    logoutUrl.searchParams.set("post_logout_redirect_uri", "https://outside.example.invalid/");
+    logoutDestination = logoutUrl.href;
+    await logoutPage.goto(origin + "/admin");
+    await logoutPage.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(logoutPage).toHaveURL(origin + "/en");
+    assert.equal(logoutRequests, beforeLogout + 2);
+    assert.equal(providerVisits, 1);
     await context.close();
     await browser.close();
     browser = null;
-    console.log(engine + " verified the managed operation, cancellation, original form and blocked-popup return through the Portal proxy.");
+    console.log(engine + " verified managed operation, cancellation, blocked-popup return, and sign-out through the Portal proxy.");
   }
 } finally {
   await browser?.close();
