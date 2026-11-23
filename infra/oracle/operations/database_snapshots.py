@@ -13,6 +13,7 @@ import os
 import re
 import select
 import signal
+import ssl
 import subprocess
 import time
 import urllib.parse
@@ -21,6 +22,7 @@ import uuid
 from pathlib import Path
 
 import backup
+import database_target
 
 STATE = Path("/var/lib/onesa/operations")
 CONFIG = Path("/etc/onesa/database-backups.json")
@@ -83,19 +85,60 @@ def settings_for(product, config):
     return values, uri
 
 
-def pg_snapshot(uri):
-    if uri.scheme not in ("postgresql", "postgresql+psycopg") or uri.path != "/neondb":
+def private_postgres_binding(profile):
+    if not isinstance(profile, dict) or set(profile) != {"network_id", "ca_path", "ca_sha256"}:
+        raise ValueError("Invalid private PostgreSQL binding")
+    network_id = profile["network_id"]
+    if not database_target.pin(network_id) or not database_target.pin(profile["ca_sha256"]):
+        raise ValueError("Invalid private PostgreSQL identity")
+    ca_path = profile["ca_path"]
+    if (
+        not isinstance(ca_path, str)
+        or not Path(ca_path).is_relative_to("/etc/onesa")
+        or any(character in ca_path for character in "\r\n\x00,:")
+    ):
+        raise ValueError("Invalid private PostgreSQL CA path")
+    ca = database_target.private_bytes(ca_path, limit=16384)
+    if hashlib.sha256(ca).hexdigest() != profile["ca_sha256"]:
+        raise ValueError("Private PostgreSQL CA changed")
+    try:
+        ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cadata=ca.decode("ascii"))
+    except (ValueError, ssl.SSLError):
+        raise ValueError("Invalid private PostgreSQL CA") from None
+    network = database_target.inspect("network", network_id)
+    if network.get("Id") != network_id or network.get("Driver") != "bridge" or network.get("Scope") != "local":
+        raise ValueError("Private PostgreSQL network changed")
+    return {"network_id": network_id, "ca": ca}
+
+
+def pg_snapshot(uri, *, binding=None):
+    database = uri.path.removeprefix("/")
+    if binding is None and uri.path != "/neondb":
         raise ValueError("Unsupported PostgreSQL target")
+    if (
+        uri.scheme not in ("postgresql", "postgresql+psycopg")
+        or not uri.hostname
+        or not uri.username
+        or uri.password is None
+        or not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,62}", database)
+        or uri.fragment
+    ):
+        raise ValueError("Invalid PostgreSQL target")
+    if binding and urllib.parse.parse_qs(uri.query).get("sslmode") != ["verify-full"]:
+        raise ValueError("Private PostgreSQL requires verify-full TLS")
     uid = uuid.uuid4().hex
     service = STATE / ("snapshot-pg-" + uid + ".conf")
+    certificate = service.with_suffix(".crt") if binding else None
+    docker = database_target.DOCKER if binding else ["docker"]
+    process_env = database_target.PROCESS_ENV if binding else None
     fields = {
         "host": uri.hostname,
         "port": str(uri.port or 5432),
         "user": urllib.parse.unquote(uri.username),
         "password": urllib.parse.unquote(uri.password),
-        "dbname": "neondb",
+        "dbname": database,
         "sslmode": "verify-full",
-        "sslrootcert": "/etc/ssl/certs/ca-certificates.crt",
+        "sslrootcert": "/secrets/database-ca.crt" if binding else "/etc/ssl/certs/ca-certificates.crt",
         "channel_binding": "require",
         "options": "-c default_transaction_read_only=on",
     }
@@ -120,16 +163,27 @@ def pg_snapshot(uri):
 
     def checked(command, maximum):
         result = subprocess.run(
-            command, capture_output=True, timeout=remaining(maximum), check=False
+            command, capture_output=True, timeout=remaining(maximum), check=False, env=process_env,
         )
         if result.returncode:
             raise ValueError("Snapshot command failed")
         return result.stdout
 
     try:
+        network_arguments = []
+        if binding:
+            with os.fdopen(
+                os.open(certificate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600),
+                "wb",
+            ) as stream:
+                stream.write(binding["ca"])
+            network_arguments = [
+                "--network", binding["network_id"],
+                "-v", str(certificate) + ":/secrets/database-ca.crt:ro",
+            ]
         checked(
             [
-                "docker",
+                *docker,
                 "run",
                 "-d",
                 "--rm",
@@ -144,6 +198,7 @@ def pg_snapshot(uri):
                 "ALL",
                 "--security-opt",
                 "no-new-privileges",
+                *network_arguments,
                 "-v",
                 str(service) + ":/secrets/pg.conf:ro",
                 "-e",
@@ -158,11 +213,12 @@ def pg_snapshot(uri):
             15,
         )
         pipe = subprocess.Popen(
-            ["docker", "exec", "-i", client, "psql", "-XqAt", "-v", "ON_ERROR_STOP=1"],
+            [*docker, "exec", "-i", client, "psql", "-XqAt", "-v", "ON_ERROR_STOP=1"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
+            env=process_env,
         )
         buffered = bytearray()
 
@@ -201,7 +257,7 @@ def pg_snapshot(uri):
                 raise ValueError("Table bound exceeded")
         dump = checked(
             [
-                "docker",
+                *docker,
                 "exec",
                 client,
                 "pg_dump",
@@ -228,13 +284,16 @@ def pg_snapshot(uri):
         finally:
             try:
                 subprocess.run(
-                    ["docker", "rm", "-f", "--volumes", client],
+                    [*docker, "rm", "-f", "--volumes", client],
                     capture_output=True,
                     timeout=20,
                     check=False,
+                    env=process_env,
                 )
             finally:
                 service.unlink(missing_ok=True)
+                if certificate is not None:
+                    certificate.unlink(missing_ok=True)
 
 
 def robot_snapshot(values, uri):
@@ -318,12 +377,21 @@ def main(product):
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     config = private_json(CONFIG)
     values, uri = settings_for(product, config)
+    profile = config["products"][product]
+    private_postgres = "private_postgres" in profile
+    if private_postgres and product != "ai":
+        raise ValueError("Private PostgreSQL binding only applies to AI")
     with (STATE / ("database-backup-" + product + ".lock")).open("w") as lock:
         os.chmod(lock.name, 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        dump, manifest = (
-            pg_snapshot(uri) if product == "ai" else robot_snapshot(values, uri)
-        )
+        binding = private_postgres_binding(profile["private_postgres"]) if private_postgres else None
+        dump, manifest = (pg_snapshot(uri, binding=binding) if product == "ai"
+                          else robot_snapshot(values, uri))
+        if binding:
+            if private_json(CONFIG) != config or settings_for(product, config)[1] != uri:
+                raise ValueError("Private PostgreSQL snapshot profile changed")
+            if private_postgres_binding(profile["private_postgres"]) != binding:
+                raise ValueError("Private PostgreSQL snapshot resources changed")
         backup.checked_env()
         transport = private_json(Path("/etc/onesa/operations.json"))["image"]
         if not re.fullmatch(r"onesa-portal-worker:[a-f0-9]{40}", transport):

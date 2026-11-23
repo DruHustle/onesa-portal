@@ -3,11 +3,13 @@
 import datetime
 import hashlib
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "infra/oracle/operations"))
@@ -16,6 +18,77 @@ import monitor
 
 
 class SnapshotSafety(unittest.TestCase):
+    def test_private_postgres_declines_hosted_defaults_and_weak_tls(self):
+        uri = urlsplit("postgresql://reader:fixture@private.invalid/production")
+        with patch.object(snapshots.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "Unsupported PostgreSQL target"):
+                snapshots.pg_snapshot(uri)
+            with self.assertRaisesRegex(ValueError, "requires verify-full TLS"):
+                snapshots.pg_snapshot(uri, binding={"network_id": "a" * 64, "ca": b"test"})
+            run.assert_not_called()
+
+    def test_private_postgres_declines_changed_ca_or_network(self):
+        ca = b"synthetic CA"
+        profile = {
+            "network_id": "a" * 64,
+            "ca_path": "/etc/onesa/test.crt",
+            "ca_sha256": hashlib.sha256(ca).hexdigest(),
+        }
+        with (
+            patch.object(snapshots.database_target, "private_bytes", return_value=ca) as read,
+            patch.object(snapshots.database_target, "inspect") as inspect,
+            patch.object(snapshots.ssl, "SSLContext") as context,
+        ):
+            with self.assertRaisesRegex(ValueError, "CA changed"):
+                snapshots.private_postgres_binding(dict(profile, ca_sha256="b" * 64))
+            inspect.assert_not_called()
+            inspect.return_value = {"Id": "b" * 64, "Driver": "bridge", "Scope": "local"}
+            with self.assertRaisesRegex(ValueError, "network changed"):
+                snapshots.private_postgres_binding(profile)
+            inspect.return_value["Id"] = profile["network_id"]
+            self.assertEqual(
+                snapshots.private_postgres_binding(profile),
+                {"network_id": profile["network_id"], "ca": ca},
+            )
+            read.assert_called_with(profile["ca_path"], limit=16384)
+            context.return_value.load_verify_locations.assert_called_with(cadata=ca.decode("ascii"))
+
+    def test_private_postgres_uses_pinned_network_and_cleans_tls_files_on_failure(self):
+        uri = urlsplit("postgresql://reader:fixture@private.invalid/production?sslmode=verify-full")
+        binding = {"network_id": "a" * 64, "ca": b"synthetic CA"}
+        commands = []
+
+        def docker(command, **kwargs):
+            self.assertEqual(kwargs["env"], snapshots.database_target.PROCESS_ENV)
+            self.assertEqual(command[:len(snapshots.database_target.DOCKER)], snapshots.database_target.DOCKER)
+            action = command[len(snapshots.database_target.DOCKER)]
+            commands.append(action)
+            if action == "run":
+                network = command.index("--network")
+                self.assertEqual(command[network + 1], binding["network_id"])
+                mounts = {argument.split(":", 1)[1]: Path(argument.split(":", 1)[0])
+                          for argument in command if argument.startswith(str(state) + "/")}
+                self.assertEqual(mounts["/secrets/database-ca.crt:ro"].read_bytes(), binding["ca"])
+                config = mounts["/secrets/pg.conf:ro"].read_text()
+                self.assertIn("\ndbname=production\n", config)
+                self.assertIn("\nsslmode=verify-full\n", config)
+                self.assertIn("\nsslrootcert=/secrets/database-ca.crt\n", config)
+                self.assertIn("\noptions=-c default_transaction_read_only=on\n", config)
+                self.assertNotIn("fixture", " ".join(command))
+                return subprocess.CompletedProcess(command, 1, b"", b"")
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            with (
+                patch.object(snapshots, "STATE", state),
+                patch.object(snapshots.subprocess, "run", side_effect=docker),
+            ):
+                with self.assertRaisesRegex(ValueError, "Snapshot command failed"):
+                    snapshots.pg_snapshot(uri, binding=binding)
+            self.assertEqual(commands, ["run", "rm"])
+            self.assertEqual(list(state.iterdir()), [])
+
     def test_robot_rejects_other_environment_before_network(self):
         from urllib.parse import urlsplit
 
