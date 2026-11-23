@@ -1,7 +1,7 @@
 import '@/lib/server/tls-trust';
 import {legacyEngineeringFixture} from "@/lib/engineering-test-fixture";
 import {operationChallenge} from "@/lib/managed-operation";
-import {managedPortalRedirect} from "@/lib/managed-portal-redirect";
+import {managedPortalLogoutRedirect,managedPortalRedirect} from "@/lib/managed-portal-redirect";
 import {identityProtocolPath,identityRedirectLocation} from "@/lib/onesa-identity";
 import {engineeringProtocolPath,engineeringRedirectLocation} from '@/lib/engineering-identity';
 import {NextRequest} from 'next/server';
@@ -42,7 +42,12 @@ if(path[0]==='account'&&path[1]==='billing'){const key=request.headers.get('idem
 const limit=process.env.VERCEL==='1'?4*1024*1024:15*1024*1024;const declared=Number(request.headers.get('content-length')||0);if(declared>limit)return Response.json({error:{code:'FILE_SIZE',message:'Request too large',requestId:'proxy'}},{status:413});try{const body=await boundedBody(request,limit);if(body&&body.byteLength>limit)return Response.json({error:{code:'FILE_SIZE',message:'Request too large',requestId:'proxy'}},{status:413});const response=await fetch(`${process.env.BACKEND_URL||'http://127.0.0.1:8300'}/api/v1/${path.join('/')}${request.nextUrl.search}`,{method:request.method,headers,body,redirect:'manual',signal:AbortSignal.any([request.signal,AbortSignal.timeout(20000)]),cache:'no-store'});const output=new Headers();for(const key of ['content-type','content-disposition','x-request-id','retry-after','cache-control','x-content-type-options','x-file-size','x-file-sha256']){const value=response.headers.get(key);if(value)output.set(key,value);}if(response.status===403&&path[0]==='admin'&&path[1]==='governance'){
   const challenge=operationChallenge(response.headers.get('x-onesa-step-up'));
   if(challenge)output.set('x-onesa-step-up',challenge);
-}for(const cookie of response.headers.getSetCookie())output.append('set-cookie',cookie);if(response.status>=300&&response.status<400&&path[0]==='auth'&&path[1]==='managed'){
+}
+if(response.status===200&&request.method==='POST'&&path.join('/')==='auth/logout'&&process.env.ONESA_IDENTITY_PORTAL_LOGIN==='managed'){
+  const logout=managedPortalLogoutRedirect(response.headers.get('x-onesa-logout-url'),origin,process.env.ONESA_IDENTITY_ISSUER);
+  if(logout)output.set('x-onesa-logout-url',logout);
+}
+for(const cookie of response.headers.getSetCookie())output.append('set-cookie',cookie);if(response.status>=300&&response.status<400&&path[0]==='auth'&&path[1]==='managed'){
   const location=managedPortalRedirect(path,response.headers.get('location'),origin,process.env.ONESA_IDENTITY_ISSUER);
   if(!location)return Response.json({error:{code:'IDENTITY_REDIRECT',message:'Sign-in could not be completed',requestId:'proxy'}},{status:502});
   if(operationStart){

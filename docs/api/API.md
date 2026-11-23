@@ -245,6 +245,15 @@ product grants bound to that native session. It preserves other native sessions
 and independent account sessions. `/account/logout` and `/auth/revoke` retain
 their documented all-session revocation behavior.
 
+Managed Portal sign-out revokes the local session before returning. Once the
+dedicated Auth0 application allows the exact HTTPS Portal origin plus `/en`
+as a logout return URL, set `ONESA_IDENTITY_PORTAL_LOGOUT_ENABLED=true` on
+the Portal API. With the setting enabled, an active session from the configured
+issuer can receive an optional `X-Onesa-Logout-Url` response header. The
+Portal proxy validates the issuer and return URL before forwarding the header.
+The browser then opens the Auth0 sign-out page.
+The default behavior ends the local session.
+
 Same-account reauthentication rotates the browser credential while carrying existing
 product grants to its replacement. Each carried grant retains its original
 authentication time, factors and expiry; confirming MFA in one product cannot
