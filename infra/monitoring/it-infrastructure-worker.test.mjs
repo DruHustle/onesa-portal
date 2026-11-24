@@ -42,7 +42,9 @@ test('staging signup uses its separately configured Account origin', async () =>
   for (const origin of [
     undefined,
     'https://account.onesa.eu',
+    'https://account.onesa.eu.:8443',
     stage,
+    stage + ':8443',
     'http://account-staging.example.test',
     'https://account-staging.example.test/path',
     'https://auth.onesa.eu',
@@ -305,7 +307,7 @@ test('sign-out clears Access then sends the same browser to Auth0 with a fixed s
 
 test('staging logout requires its separate issuer and production pins the branded Auth0 origin', async () => {
   const stage = 'https://infrastructure-staging.example.test';
-  for (const issuer of [undefined, 'https://auth.onesa.eu/', 'https://onesa.eu.auth0.com', stage,
+  for (const issuer of [undefined, 'https://auth.onesa.eu/', 'https://auth.onesa.eu.:8443/', 'https://onesa.eu.auth0.com', stage, stage + ':8443',
     'http://auth-staging.example.test', 'https://auth-staging.example.test/oidc/logout']) {
     const env = {...audience, ...logoutBinding, INFRASTRUCTURE_ORIGIN: stage,
       INFRASTRUCTURE_AUTH0_LOGOUT_ISSUER: issuer};

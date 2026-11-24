@@ -74,10 +74,10 @@ async function verifiedPasofiCapabilities(response){
 
 const infrastructureOrigin = 'https://it-infrastructure.onesa.eu';
 const accountOrigin = 'https://account.onesa.eu';
-const productionRegistrationOrigins = new Set([
-  accountOrigin,
-  'https://auth.onesa.eu',
-  'https://onesa.eu.auth0.com',
+const productionIdentityHosts = new Set([
+  'account.onesa.eu',
+  'auth.onesa.eu',
+  'onesa.eu.auth0.com',
 ]);
 const administratorClaim = 'https://onesa.eu/claims/infrastructure_admin';
 const dashboardPaths = new Set(['/dashboard', '/dashboard/']);
@@ -145,11 +145,22 @@ function registrationLink(origin) {
   }
 }
 
+function isolatedHttpsOrigin(value, dashboardOrigin) {
+  try {
+    const candidate = new URL(value);
+    const hostname = url => url.hostname.replace(/\.$/, '');
+    if (candidate.protocol !== 'https:' || ![candidate.origin, candidate.origin + '/'].includes(value) ||
+      hostname(candidate) === hostname(new URL(dashboardOrigin)) || productionIdentityHosts.has(hostname(candidate))) return null;
+    return candidate.origin;
+  } catch {
+    return null;
+  }
+}
+
 function registrationOriginFor(currentOrigin, stagedAccountOrigin) {
   if (currentOrigin === infrastructureOrigin) return accountOrigin;
   // A staged registration must not create a pending request in production.
-  if (stagedAccountOrigin === currentOrigin || productionRegistrationOrigins.has(stagedAccountOrigin)) return undefined;
-  return stagedAccountOrigin;
+  return isolatedHttpsOrigin(stagedAccountOrigin, currentOrigin) === stagedAccountOrigin ? stagedAccountOrigin : undefined;
 }
 
 function publicEntry(registrationOrigin) {
@@ -181,15 +192,8 @@ function logoutBinding(env, origin) {
   const client = env?.INFRASTRUCTURE_AUTH0_LOGOUT_CLIENT_ID;
   if (typeof client !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(client)) return null;
   if (origin === infrastructureOrigin) return {client, issuer: auth0Origin};
-  const stagedIssuer = env?.INFRASTRUCTURE_AUTH0_LOGOUT_ISSUER;
-  try {
-    const parsed = new URL(stagedIssuer);
-    if (parsed.protocol !== 'https:' || ![parsed.origin, parsed.origin + '/'].includes(stagedIssuer) ||
-      parsed.origin === origin || productionRegistrationOrigins.has(parsed.origin)) return null;
-    return {client, issuer: parsed.origin};
-  } catch {
-    return null;
-  }
+  const issuer = isolatedHttpsOrigin(env?.INFRASTRUCTURE_AUTH0_LOGOUT_ISSUER, origin);
+  return issuer ? {client, issuer} : null;
 }
 
 function logoutRedirect(target, headers, cookieValue, maxAge) {
