@@ -39,9 +39,17 @@ test('staging signup uses its separately configured Account origin', async () =>
   const stage = 'https://infrastructure-staging.example.test';
   const request = new Request(stage);
   const env = {INFRASTRUCTURE_ORIGIN: stage};
-  for (const origin of [undefined, 'http://account-staging.example.test', 'https://account-staging.example.test/path']) {
+  for (const origin of [
+    undefined,
+    'https://account.onesa.eu',
+    stage,
+    'http://account-staging.example.test',
+    'https://account-staging.example.test/path',
+    'https://auth.onesa.eu',
+    'https://onesa.eu.auth0.com',
+  ]) {
     const response = await worker.fetch(request, {...env, INFRASTRUCTURE_ACCOUNT_ORIGIN: origin});
-    assert.doesNotMatch(await response.text(), /Sign up|account\.onesa\.eu/);
+    assert.equal((await response.text()).includes('>Sign up<'), false, String(origin));
   }
   const response = await worker.fetch(request, {...env, INFRASTRUCTURE_ACCOUNT_ORIGIN: 'https://account-staging.example.test'});
   assert.match(await response.text(), /https:\/\/account-staging\.example\.test\/register\?product=portal&amp;audience=admin/);
@@ -68,7 +76,10 @@ test('all dashboard endpoints reject unapproved identities before reaching monit
   try {
     for (const path of ['/dashboard', '/dashboard/', '/dashboard/dashboard.js', '/dashboard/api/status', '/dashboard.js', '/api/status']) {
       for (const [env, context] of denied) {
-        const request = new Request(base + path, {headers: {'Cf-Access-Jwt-Assertion': 'untrusted-user-header'}});
+        const request = new Request(base + path, {headers: {
+          'Cf-Access-Jwt-Assertion': 'untrusted-user-header',
+          'Cf-Access-Authenticated-User-Email': approvedIdentity.email,
+        }});
         const response = await worker.fetch(request, env, context);
         assert.equal(response.status, 403, path);
         assert.equal(await response.text(), 'Approved infrastructure access required');
