@@ -87,3 +87,5 @@ try {
   if(child&&child.exitCode===null){child.kill("SIGTERM");await once(child,"exit");}
   await new Promise(resolve=>api.close(resolve));
 }
+
+await import('./test-infrastructure-logout.mjs');

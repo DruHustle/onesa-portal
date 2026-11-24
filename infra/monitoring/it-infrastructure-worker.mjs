@@ -74,15 +74,22 @@ async function verifiedPasofiCapabilities(response){
 
 const infrastructureOrigin = 'https://it-infrastructure.onesa.eu';
 const accountOrigin = 'https://account.onesa.eu';
-const productionRegistrationOrigins = new Set([
-  accountOrigin,
-  'https://auth.onesa.eu',
-  'https://onesa.eu.auth0.com',
+const productionIdentityHosts = new Set([
+  'account.onesa.eu',
+  'auth.onesa.eu',
+  'onesa.eu.auth0.com',
 ]);
 const administratorClaim = 'https://onesa.eu/claims/infrastructure_admin';
 const dashboardPaths = new Set(['/dashboard', '/dashboard/']);
 const scriptPaths = new Set(['/dashboard/dashboard.js', '/dashboard.js']);
 const statusPaths = new Set(['/dashboard/api/status', '/api/status']);
+const logoutPath = '/dashboard/logout';
+const accessLogoutPath = '/cdn-cgi/access/logout';
+const auth0LogoutPath = '/oidc/logout';
+const auth0Origin = 'https://auth.onesa.eu';
+const logoutCookie = '__Host-onesa-infrastructure-logout';
+const logoutStateParam = 'finish_logout';
+const logoutStatePattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const entryStyle = `
   :root { color-scheme: light dark; font-family: system-ui, sans-serif; color: #102b29; background: #f4f8f7; }
@@ -139,11 +146,22 @@ function registrationLink(origin) {
   }
 }
 
+function isolatedHttpsOrigin(value, dashboardOrigin) {
+  try {
+    const candidate = new URL(value);
+    const hostname = url => url.hostname.replace(/\.$/, '');
+    if (candidate.protocol !== 'https:' || ![candidate.origin, candidate.origin + '/'].includes(value) ||
+      hostname(candidate) === hostname(new URL(dashboardOrigin)) || productionIdentityHosts.has(hostname(candidate))) return null;
+    return candidate.origin;
+  } catch {
+    return null;
+  }
+}
+
 function registrationOriginFor(currentOrigin, stagedAccountOrigin) {
   if (currentOrigin === infrastructureOrigin) return accountOrigin;
   // A staged registration must not create a pending request in production.
-  if (stagedAccountOrigin === currentOrigin || productionRegistrationOrigins.has(stagedAccountOrigin)) return undefined;
-  return stagedAccountOrigin;
+  return isolatedHttpsOrigin(stagedAccountOrigin, currentOrigin) === stagedAccountOrigin ? stagedAccountOrigin : undefined;
 }
 
 function publicEntry(registrationOrigin) {
@@ -171,6 +189,42 @@ async function canOpenDashboard(access, audience) {
   }
 }
 
+function logoutBinding(env, origin) {
+  const client = env?.INFRASTRUCTURE_AUTH0_LOGOUT_CLIENT_ID;
+  if (typeof client !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(client)) return null;
+  if (origin === infrastructureOrigin) return {client, issuer: auth0Origin};
+  const issuer = isolatedHttpsOrigin(env?.INFRASTRUCTURE_AUTH0_LOGOUT_ISSUER, origin);
+  return issuer ? {client, issuer} : null;
+}
+
+function logoutRedirect(target, headers, cookieValue, maxAge) {
+  headers.set('Location', target.href);
+  headers.set('Set-Cookie', `${logoutCookie}=${cookieValue}; Path=/; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=Lax`);
+  return new Response(null, {status: 303, headers});
+}
+
+function startLogout(origin, headers) {
+  const state = crypto.randomUUID();
+  const landing = new URL('/', origin);
+  landing.searchParams.set(logoutStateParam, state);
+  const accessLogout = new URL(accessLogoutPath, origin);
+  accessLogout.searchParams.set('returnTo', landing.href);
+  return logoutRedirect(accessLogout, headers, state, 120);
+}
+
+function completeLogout(url, request, binding, headers) {
+  // Cloudflare has already cleared Access. Bind the return to the browser
+  // that submitted the protected sign-out form before asking Auth0 to end SSO.
+  const [state, duplicate] = url.searchParams.getAll(logoutStateParam);
+  if (!state || duplicate !== undefined || !logoutStatePattern.test(state)) return null;
+  const expectedCookie = `${logoutCookie}=${state}`;
+  if (!(request.headers.get('Cookie') || '').split(';').some(cookie => cookie.trim() === expectedCookie)) return null;
+  const auth0Logout = new URL(auth0LogoutPath, binding.issuer);
+  auth0Logout.searchParams.set('client_id', binding.client);
+  auth0Logout.searchParams.set('post_logout_redirect_uri', new URL('/', url.origin).href);
+  return logoutRedirect(auth0Logout, headers, '', 0);
+}
+
 const headers={"Cache-Control":"private, no-store, max-age=0","X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer","X-Frame-Options":"DENY","X-Robots-Tag":"noindex, nofollow, noarchive","Strict-Transport-Security":"max-age=31536000","Permissions-Policy":"camera=(), microphone=(), geolocation=(), payment=()","Content-Security-Policy":"default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' data:; upgrade-insecure-requests"};
 export default {async fetch(request, env, context){
  const url = new URL(request.url);
@@ -178,11 +232,21 @@ export default {async fetch(request, env, context){
  if (url.protocol !== 'https:' || url.origin !== (env?.INFRASTRUCTURE_ORIGIN || infrastructureOrigin)) {
    return new Response(null, {status: 404, headers: h});
  }
- if(method!=="GET"&&method!=="HEAD"){h.set("Allow","GET, HEAD");return new Response(null,{status:405,headers:h})}
- if ((dashboardPaths.has(path) || scriptPaths.has(path) || statusPaths.has(path))
+ const logout = logoutBinding(env, url.origin);
+ const logoutRequest = path === logoutPath && method === 'POST' && Boolean(logout);
+ if(method!=="GET"&&method!=="HEAD"&&!logoutRequest){h.set("Allow","GET, HEAD");return new Response(null,{status:405,headers:h})}
+ if ((dashboardPaths.has(path) || scriptPaths.has(path) || statusPaths.has(path) || logoutRequest)
    && !await canOpenDashboard(context?.access, env?.INFRASTRUCTURE_ACCESS_AUD)) {
    h.set('Content-Type', 'text/plain; charset=utf-8');
    return new Response(method === 'HEAD' ? null : 'Approved infrastructure access required', {status: 403, headers: h});
+ }
+ if (logoutRequest) {
+   if (request.headers.get('Origin') !== url.origin) return new Response(null, {status: 403, headers: h});
+   return startLogout(url.origin, h);
+ }
+ if (logout && path === '/' && method === 'GET') {
+   const completion = completeLogout(url, request, logout, h);
+   if (completion) return completion;
  }
  let body="",status=200;
  if (path === '/' || path === '/index.html' || path === '/access-requested') {
@@ -190,7 +254,21 @@ export default {async fetch(request, env, context){
     const registrationOrigin = registrationOriginFor(url.origin, env?.INFRASTRUCTURE_ACCOUNT_ORIGIN);
    body = path === '/access-requested' ? accessRequest : publicEntry(registrationOrigin);
  }
- else if (dashboardPaths.has(path)) {h.set('Content-Type', 'text/html; charset=utf-8');body = PAGE}
+ else if (dashboardPaths.has(path)) {
+   h.set('Content-Type', 'text/html; charset=utf-8');
+   body = PAGE;
+   if (logout) {
+     // Chromium enforces form-action across redirects. Allow the exact IdP
+     // logout destination so the same-origin POST can finish provider sign-out.
+     const providerLogout = new URL(auth0LogoutPath, logout.issuer);
+     h.set('Content-Security-Policy', headers['Content-Security-Policy'].replace("form-action 'none'", `form-action 'self' ${providerLogout.href}`));
+     // Form-navigation POSTs need an Origin header. A same-origin referrer
+     // policy preserves it without sending a referrer to any external tool.
+     h.set('Referrer-Policy', 'same-origin');
+     body = PAGE.replace(`<a href="${accessLogoutPath}">Sign out</a>`,
+       `<form method="post" action="${logoutPath}" style="display:inline"><button type="submit" class="small-button">Sign out</button></form>`);
+   }
+ }
  else if (scriptPaths.has(path)) {h.set('Content-Type', 'text/javascript; charset=utf-8');body = DASHBOARD_JS}
  else if(path==="/favicon.svg"){h.set("Content-Type","image/svg+xml; charset=utf-8");body=ICON}
  else if(path==="/robots.txt"){h.set("Content-Type","text/plain; charset=utf-8");body="User-agent: *\\nDisallow: /\\n"}

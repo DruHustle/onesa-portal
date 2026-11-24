@@ -93,6 +93,18 @@ lifetime. It cannot establish ongoing access to a farm, shipment or machine.
 Report the separately measured lifetime or invalidation of every external
 session, especially Cloudflare Access and native offline access.
 
+IT Infrastructure can end both its Cloudflare Access session and the branded
+Auth0 SSO session. Configure `INFRASTRUCTURE_AUTH0_LOGOUT_CLIENT_ID` with the
+dashboard's configured Auth0 client and register the exact dashboard origin
+with its trailing `/` as an application logout return. For staging, also set
+`INFRASTRUCTURE_AUTH0_LOGOUT_ISSUER` to the separate HTTPS issuer used by its
+Access provider. The approved dashboard
+submits a same-origin form, ends Access, and resumes at the public landing
+through a short-lived browser cookie before continuing to Auth0. Keep the
+landing reachable after Access logout and verify that signing in again prompts
+for credentials. A removed administrator grant also requires revoking the
+previously issued Access session. These are separate acceptance checks.
+
 A PasoFi Wi-Fi voucher, router credential, payment webhook, factory agent or
 hardware interlock has its own scope and lifecycle. Human sign-in identifies
 the person using a product. Product or device controls still decide whether a
