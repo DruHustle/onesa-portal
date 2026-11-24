@@ -6,8 +6,29 @@ const origin=new URL(process.env.DOMAIN_TEST_FRONTEND_ORIGIN||'http://127.0.0.1:
 assert.equal(origin.protocol,'http:');
 assert.ok(['127.0.0.1','localhost'].includes(origin.hostname),'Only the isolated local frontend may be probed');
 function request(host,path,extra={}){return new Promise((resolve,reject)=>{const req=http.get(new URL(path,origin),{headers:{Host:host,'X-Forwarded-Host':host,'X-Forwarded-Proto':'https',...extra}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}));});req.setTimeout(25000,()=>req.destroy(new Error('Local probe timed out')));req.on('error',reject);});}
-const cases=[['portal.onesa.eu','/',307,'https://portal.onesa.eu/account'],['onesa.eu','/privacy-policy',308,'/en/privacy'],['onesa.eu','/admin/users',307,'https://portal.onesa.eu/admin/users'],['portal.onesa.eu','/en/contact',307,'https://onesa.eu/en/contact'],['unknown.invalid','/',421],['onesa.eu','/api/v1/auth/me',403],['portal.onesa.eu','/api/v1/auth/me',503],['portal.onesa.eu','/access/register?audience=admin',307,'/account/register?next=/admin']];
+const cases=[['onesa.eu','/privacy-policy',308,'/en/privacy'],['onesa.eu','/admin/users',307,'https://portal.onesa.eu/admin/users'],['portal.onesa.eu','/en/contact',307,'https://onesa.eu/en/contact'],['unknown.invalid','/',421],['onesa.eu','/api/v1/auth/me',403],['portal.onesa.eu','/api/v1/auth/me',503],['portal.onesa.eu','/access/register?audience=admin',307,'/account/register?next=/admin']];
 for(const [host,path,status,location] of cases){const response=await request(host,path);assert.equal(response.status,status,`${host}${path}`);if(location)assert.equal(response.headers.location,location);console.log(`PASS ${host}${path} → ${status}`);}
+
+const portalOverview = await request('portal.onesa.eu', '/');
+assert.equal(portalOverview.status, 200);
+assert.equal(portalOverview.headers.location, undefined);
+assert.equal(portalOverview.headers['x-robots-tag'], 'noindex, nofollow');
+assert.equal(portalOverview.headers['cache-control'], 'private, no-store');
+const overviewHtml = portalOverview.body.toString();
+assert.match(overviewHtml, /<h1>Onesa Company Portal<\/h1>/);
+for (const [publicPath, section] of [
+  ['/en/products', 'Content'], ['/en/contact', 'Enquiries'], ['/en/careers', 'Applications'],
+]) {
+  assert.ok(overviewHtml.includes(`href="${publicPath}"`), publicPath);
+  assert.match(overviewHtml, new RegExp(`href="[^"]+section%3D${section}"`));
+}
+assert.match(overviewHtml, /<h2>Staff and access<\/h2>/);
+assert.match(overviewHtml, /href="[^"]+section%3DUsers"/);
+assert.equal((overviewHtml.match(/<dt>Example<\/dt>/g) ?? []).length, 4);
+assert.ok(overviewHtml.includes('href="/account"'));
+assert.ok(overviewHtml.includes('href="/account/register"'));
+assert.doesNotMatch(overviewHtml, /<form|\/api\/v1\/auth\/me/);
+console.log('PASS signed-out Portal overview and feature-specific sign-in links');
 
 for (const path of ['/account', '/account/register', '/account/register?next=%2Fengineering']) {
   const company = await request('onesa.eu', path);
