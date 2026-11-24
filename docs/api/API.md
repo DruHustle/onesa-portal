@@ -378,6 +378,12 @@ The response includes dependency/hosting descriptions, last observation,
 environment, observed revision when available and a scope description. It never
 returns provider credentials, raw responses or secret-file paths.
 
+The PasoFi card shows API liveness and payment fulfilment independently. A
+fresh verified-payment count above zero is critical. A fresh zero reports the
+last successful check found no unmatched payments. An unavailable result gives
+no count, and a stale result displays the previous observation and its time.
+Without an owner observation the card reports fulfilment as unobserved.
+
 Snapshots use version 1 and an `observations` array. Each entry has `id`, UTC
 `observedAt`, `state` (`available`, `unavailable`, `not_observed`), `source`
 (`public_http`, `owner_runtime`), `environment` and nullable source `revision`.
@@ -446,6 +452,42 @@ valid snapshot from its own source. Public rows cannot report private Kubernetes
 or Portainer observations. A missing or invalid input or an unsafe previous file
 leaves the existing dashboard intact. Use an empty private version-1 snapshot
 when commissioning the first public-only observations for an aggregated dashboard.
+
+#### PasoFi payment fulfilment
+
+The production owner observer can add an optional `pasofiFulfilment` field to
+its existing version-1 snapshot alongside `observations`. For example, a
+synthetic owner snapshot with one unmatched verified payment has this shape.
+
+```json
+{
+  "version": 1,
+  "observations": [],
+  "pasofiFulfilment": {
+    "source": "owner_runtime",
+    "environment": "production",
+    "observedAt": "2026-11-24T00:00:00Z",
+    "paidUnfulfilled": 1
+  }
+}
+```
+
+At the time of the check, copy only the `paid_unfulfilled` count from the
+production PasoFi private operator aggregate into `paidUnfulfilled`. The
+Node check reports it at `queues["prepaid-access"].paid_unfulfilled` and
+the deployment postcheck at `queues["prepaid-access"].counts.paid_unfulfilled`.
+It counts verified live payments without a matching entitlement. A report
+that raises the critical alert can carry a valid count even when the operator
+command exits unsuccessfully. Use `null` with the actual attempt time if the
+private check cannot establish a count.
+Keep payment identifiers and raw operator output in PasoFi. The merger
+accepts the field only from the protected owner snapshot and preserves the
+latest private fulfilment observation across public refreshes, omissions and
+older replays, and rejects a conflicting count for the same instant.
+
+Qualify the Portal reader and merger before supplying the new optional field to
+the dashboard. Older version-1 snapshots remain valid. An owner-operated
+handoff is required to copy the aggregate into the protected owner snapshot.
 
 ### Shared account email sign-in
 

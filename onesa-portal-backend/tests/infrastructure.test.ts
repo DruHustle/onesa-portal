@@ -9,17 +9,60 @@ import { infrastructureOverview, serviceRegistry } from "../src/operations/infra
 const directory = await mkdtemp(join(tmpdir(), "onesa-infrastructure-"));
 after(() => rm(directory, { recursive: true, force: true }));
 const now = Date.parse("2026-11-11T12:00:00Z");
-async function snapshot(name: string, observations: unknown[]) {
+async function snapshot(name: string, observations: unknown[], pasofiFulfilment?: unknown) {
   const file = join(directory, name);
-  await writeFile(file, JSON.stringify({ version: 1, observations }), { mode: 0o600 });
+  await writeFile(file, JSON.stringify({ version: 1, observations, pasofiFulfilment }), { mode: 0o600 });
   return file;
 }
 const observed = (id: string, state = "available", age = 0) => ({ id, state, observedAt: new Date(now - age).toISOString(), source: "public_http", environment: "production", revision: null });
+const fulfilment = (paidUnfulfilled: number | null, age = 0) => ({
+  source: "owner_runtime", environment: "production", observedAt: new Date(now - age).toISOString(), paidUnfulfilled,
+});
 test("All products, shared Web services and management services remain unknown without observations", async () => {
   const view = await infrastructureOverview("", now);
   assert.equal(view.services.length, 14);
   assert.equal(view.observationState, "not_configured");
   assert.ok(view.services.every(service => service.status === "not_observed" && service.observedAt === null));
+});
+
+test("PasoFi fulfilment distinguishes critical, clear, stale and unavailable from public API health", async () => {
+  const publicHealth = [observed("pasofi")];
+  const legacy = await infrastructureOverview(await snapshot("pasofi-legacy.json", publicHealth), now);
+  assert.deepEqual(legacy.pasofiFulfilment, { status: "not_observed", observedAt: null, paidUnfulfilled: null });
+  for (const [status, signal] of [
+    ["critical", fulfilment(2)],
+    ["clear", fulfilment(0)],
+    ["stale", fulfilment(2, 300000)],
+    ["unavailable", fulfilment(null)],
+  ] as const) {
+    const file = await snapshot("pasofi-" + status + ".json", publicHealth, signal);
+    const view = await infrastructureOverview(file, now);
+    assert.equal(view.observationState, "loaded");
+    assert.equal(view.services.find(service => service.id === "pasofi")?.status, "available");
+    assert.deepEqual(view.pasofiFulfilment, {
+      status, observedAt: signal.observedAt, paidUnfulfilled: signal.paidUnfulfilled,
+    });
+  }
+});
+
+test("PasoFi fulfilment refuses public, staging, future, malformed or detail-bearing input", async () => {
+  const signal = fulfilment(1);
+  const invalid = [
+    { ...signal, source: "public_http" },
+    { ...signal, environment: "staging" },
+    fulfilment(1, -1),
+    fulfilment(-1),
+    fulfilment(1.5),
+    fulfilment(Number.MAX_SAFE_INTEGER + 1),
+    { ...signal, paymentReference: "synthetic-must-not-escape" },
+  ];
+  for (const [index, candidate] of invalid.entries()) {
+    const file = await snapshot("pasofi-invalid-" + index + ".json", [], candidate);
+    const view = await infrastructureOverview(file, now);
+    assert.equal(view.observationState, "unavailable");
+    assert.deepEqual(view.pasofiFulfilment, { status: "not_observed", observedAt: null, paidUnfulfilled: null });
+    assert.ok(!JSON.stringify(view).includes("synthetic-must-not-escape"));
+  }
 });
 test("Drone readiness uses the commissioned API origin rather than the static Vercel UI", () => {
   const drone = serviceRegistry.find(service => service.id === "drone");
@@ -209,4 +252,48 @@ test("Aggregation retains private observations and timestamps across scheduled p
   assert.throws(() => merge(publicFile, linked));
   assert.throws(() => merge(publicFile, join(directory,"missing-private-source.json")));
   assert.deepEqual(await readFile(output), previous);
+});
+
+test("PasoFi fulfilment merges independently, rejecting conflicting or misplaced observations", async () => {
+  const collector = new URL("../../scripts/observe-infrastructure.mts", import.meta.url);
+  const output = join(directory, "pasofi-published.json");
+  const publicFile = await snapshot("pasofi-public-source.json", [observed("pasofi")]);
+  const report = {
+    ok: false,
+    checkedAt: new Date(now).toISOString(),
+    queues: { "prepaid-access": { paid_unfulfilled: 1 } },
+    problems: ["prepaid-access:critical_paid_unfulfilled:1"],
+  };
+  const privateFile = await snapshot("pasofi-private-source.json", [], {
+    source: "owner_runtime",
+    environment: "production",
+    observedAt: report.checkedAt,
+    paidUnfulfilled: report.queues["prepaid-access"].paid_unfulfilled,
+  });
+  const merge = () => execFileSync(process.execPath, ["--import", "tsx", collector.pathname, "--merge", publicFile, privateFile, output],
+    { timeout: 8000, stdio: "pipe" });
+  const readAt = (elapsed = 0) => infrastructureOverview(output, now + elapsed);
+  merge();
+  assert.equal((await readAt()).pasofiFulfilment?.status, "critical");
+  const freshPublic = { ...observed("pasofi"), observedAt: new Date(now + 1000).toISOString() };
+  await snapshot("pasofi-public-source.json", [freshPublic]);
+  await snapshot("pasofi-private-source.json", [], fulfilment(0, 1000));
+  merge();
+  const current = await readAt(1000);
+  assert.equal(current.services.find(service => service.id === "pasofi")?.observedAt, freshPublic.observedAt);
+  assert.deepEqual(current.pasofiFulfilment, { status: "critical", observedAt: fulfilment(1).observedAt, paidUnfulfilled: 1 });
+  const previous = await readFile(output);
+  await snapshot("pasofi-private-source.json", []);
+  merge();
+  assert.deepEqual(await readFile(output), previous, "An omitted private count cannot replace a recorded observation");
+  await snapshot("pasofi-private-source.json", [], fulfilment(0));
+  assert.throws(merge, "An equal timestamp cannot clear a critical observation with a contradictory count");
+  await snapshot("pasofi-public-source.json", [freshPublic], fulfilment(0, -1000));
+  await snapshot("pasofi-private-source.json", []);
+  assert.throws(merge, "A public producer cannot carry even a valid owner-shaped count");
+  assert.deepEqual(await readFile(output), previous);
+  await snapshot("pasofi-public-source.json", [freshPublic]);
+  await snapshot("pasofi-private-source.json", [], fulfilment(0, -1000));
+  merge();
+  assert.equal((await readAt(1000)).pasofiFulfilment?.status, "clear");
 });

@@ -3,7 +3,7 @@ import { mkdir, open, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { type InfrastructureObservation, readInfrastructureSnapshot, serviceRegistry, snapshotSchema } from "../onesa-portal-backend/src/operations/infrastructure.js";
+import { type InfrastructureObservation, type InfrastructureSnapshot, readInfrastructureSnapshot, serviceRegistry, snapshotSchema } from "../onesa-portal-backend/src/operations/infrastructure.js";
 
 async function readPublicProbe(url: string) {
   const response = await fetch(url, { redirect: "error", cache: "no-store", signal: AbortSignal.timeout(8000), headers: { Accept: "application/json" } });
@@ -75,13 +75,14 @@ async function publicObservations() {
   }));
 }
 
-async function publish(output: string, observations: InfrastructureObservation[]) {
-  const result = snapshotSchema.parse({ version: 1, observations });
+async function publish(output: string, snapshot: InfrastructureSnapshot) {
+  const result = snapshotSchema.parse(snapshot);
   const temporary = output + "." + randomUUID() + ".tmp";
   try {
     await writeFile(temporary, JSON.stringify(result, null, 2) + "\n", { mode: 0o600, flag: "wx" });
     await rename(temporary, output);
   } finally { await rm(temporary, { force: true }); }
+  const { observations } = result;
   console.log(JSON.stringify({ observed: observations.length, available: observations.filter(item => item.state === "available").length, unavailable: observations.filter(item => item.state === "unavailable").length, notObserved: observations.filter(item => item.state === "not_observed").length }));
 }
 
@@ -117,6 +118,15 @@ function selectObservations(rows: InfrastructureObservation[]) {
   });
 }
 
+function selectPasoFiFulfilment(prior: InfrastructureSnapshot["pasofiFulfilment"], incoming: InfrastructureSnapshot["pasofiFulfilment"]) {
+  if (!prior || !incoming) return incoming ?? prior;
+  const previousTime = timestampKey(prior.observedAt), incomingTime = timestampKey(incoming.observedAt);
+  if (incomingTime === previousTime && incoming.paidUnfulfilled !== prior.paidUnfulfilled) {
+    throw Error("Conflicting PasoFi fulfilment observations at the same timestamp");
+  }
+  return incomingTime > previousTime ? incoming : prior;
+}
+
 async function merge(publicFile: string, privateFile: string, output: string) {
   const files = [publicFile, privateFile, output];
   if (!files.every(file => isAbsolute(file))) throw Error("Absolute snapshot paths required");
@@ -130,12 +140,18 @@ async function merge(publicFile: string, privateFile: string, output: string) {
     // through the rename; process exit releases it without stale lock files.
     execFileSync("flock", ["-x", "-w", "10", "3"], { stdio: ["ignore", "ignore", "ignore", directory.fd] });
     const [publicSnapshot, privateSnapshot] = await Promise.all([readInfrastructureSnapshot(publicFile), readInfrastructureSnapshot(privateFile)]);
-    if (publicSnapshot.observations.some(row => row.source !== "public_http") || privateSnapshot.observations.some(row => row.source !== "owner_runtime"))
+    if (publicSnapshot.pasofiFulfilment || publicSnapshot.observations.some(row => row.source !== "public_http") ||
+        privateSnapshot.observations.some(row => row.source !== "owner_runtime")) {
       throw Error("Observation does not belong to its producer");
-    let prior: InfrastructureObservation[] = [];
-    try { prior = (await readInfrastructureSnapshot(output)).observations; }
+    }
+    let prior: InfrastructureSnapshot = { version: 1, observations: [] };
+    try { prior = await readInfrastructureSnapshot(output); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    await publish(output, selectObservations([...prior, ...publicSnapshot.observations, ...privateSnapshot.observations]));
+    await publish(output, {
+      version: 1,
+      observations: selectObservations([...prior.observations, ...publicSnapshot.observations, ...privateSnapshot.observations]),
+      pasofiFulfilment: selectPasoFiFulfilment(prior.pasofiFulfilment, privateSnapshot.pasofiFulfilment),
+    });
   } finally { await directory.close(); }
 }
 
@@ -143,7 +159,7 @@ const args = process.argv.slice(2);
 try {
   if (args.length === 1 && isAbsolute(args[0])) {
     await mkdir(dirname(args[0]), { recursive: true });
-    await publish(args[0], await publicObservations());
+    await publish(args[0], { version: 1, observations: await publicObservations() });
   } else if (args.length === 4 && args[0] === "--merge") {
     await merge(args[1], args[2], args[3]);
   } else { throw Error("Usage: observe-infrastructure.mts OUTPUT or --merge PUBLIC PRIVATE OUTPUT"); }
