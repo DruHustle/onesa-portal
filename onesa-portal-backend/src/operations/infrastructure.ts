@@ -34,17 +34,34 @@ const observation = z.object({
   environment: z.enum(["production", "staging", "local"]),
   revision: z.string().regex(/^[a-f0-9]{40,64}$/).nullable(),
 }).strict();
+const pasofiFulfilmentObservation = z.object({
+  source: z.literal("owner_runtime"),
+  environment: z.literal("production"),
+  observedAt: z.iso.datetime(),
+  paidUnfulfilled: z.int().nonnegative().nullable(),
+}).strict();
 const privateServiceIds = new Set<string>(serviceRegistry.filter(service => service.health === null).map(service => service.id));
-export const snapshotSchema = z.object({ version: z.literal(1), observations: z.array(observation).max(serviceRegistry.length) }).strict()
+export const snapshotSchema = z.object({
+  version: z.literal(1),
+  observations: z.array(observation).max(serviceRegistry.length),
+  pasofiFulfilment: pasofiFulfilmentObservation.optional(),
+}).strict()
   .refine(value => new Set(value.observations.map(item => item.id)).size === value.observations.length, "Duplicate service observation")
   // The registry describes production services. A direct configured snapshot must
   // not turn staging results or untrusted public probes of private controls into
   // a green production health indicator, even without going through the merger.
   .refine(value => value.observations.every(item => item.environment === "production" &&
     (item.source === "owner_runtime" || !privateServiceIds.has(item.id))), "Observation source or environment is not authorized");
+const staleAfterSeconds = 300;
+const pasofiFulfilmentStatus = z.enum(["clear", "critical", "unavailable", "not_observed", "stale"]);
 export const infrastructureSchema = z.object({
-  checkedAt: z.iso.datetime(), staleAfterSeconds: z.literal(300),
+  checkedAt: z.iso.datetime(), staleAfterSeconds: z.literal(staleAfterSeconds),
   observationState: z.enum(["loaded", "not_configured", "unavailable"]),
+  pasofiFulfilment: z.object({
+    status: pasofiFulfilmentStatus,
+    observedAt: z.iso.datetime().nullable(),
+    paidUnfulfilled: pasofiFulfilmentObservation.shape.paidUnfulfilled,
+  }).optional(),
   services: z.array(z.object({
     id: serviceId, name: z.string(), hosting: z.string(), url: z.url(), dependencies: z.array(z.string()),
     status: z.enum(["available", "unavailable", "not_observed", "stale"]),
@@ -54,6 +71,7 @@ export const infrastructureSchema = z.object({
   })),
 });
 export type InfrastructureObservation = z.infer<typeof observation>;
+export type InfrastructureSnapshot = z.infer<typeof snapshotSchema>;
 
 export async function readInfrastructureSnapshot(file: string, now = Date.now()) {
   if (!isAbsolute(file)) throw Error("Absolute observation file required");
@@ -70,27 +88,40 @@ export async function readInfrastructureSnapshot(file: string, now = Date.now())
     }
     if (length > 65536) throw Error("Oversized observation file");
     const snapshot = snapshotSchema.parse(JSON.parse(buffer.toString("utf8", 0, length)));
-    if (snapshot.observations.some(item => Date.parse(item.observedAt) > now)) throw Error("Future observation");
+    if (snapshot.observations.some(item => Date.parse(item.observedAt) > now) ||
+        (snapshot.pasofiFulfilment && Date.parse(snapshot.pasofiFulfilment.observedAt) > now)) {
+      throw Error("Future observation");
+    }
     return snapshot;
   } finally { await handle.close(); }
 }
 
 export async function infrastructureOverview(file = process.env.INFRASTRUCTURE_OBSERVATIONS_FILE, now = Date.now()) {
-  let observations: InfrastructureObservation[] = [];
+  let snapshot: InfrastructureSnapshot = { version: 1, observations: [] };
   let observationState: "loaded" | "not_configured" | "unavailable" = "not_configured";
   if (file) {
     try {
-      observations = (await readInfrastructureSnapshot(file, now)).observations;
+      snapshot = await readInfrastructureSnapshot(file, now);
       observationState = "loaded";
     } catch { observationState = "unavailable"; }
   }
+  const isStale = (observedAt: string) => now - Date.parse(observedAt) >= staleAfterSeconds * 1000;
+  const fulfilment = snapshot.pasofiFulfilment;
+  const paidUnfulfilled = fulfilment?.paidUnfulfilled ?? null;
+  let fulfilmentStatus: z.infer<typeof pasofiFulfilmentStatus> = "not_observed";
+  if (fulfilment) {
+    if (isStale(fulfilment.observedAt)) fulfilmentStatus = "stale";
+    else if (paidUnfulfilled === null) fulfilmentStatus = "unavailable";
+    else fulfilmentStatus = paidUnfulfilled > 0 ? "critical" : "clear";
+  }
   return infrastructureSchema.parse({
-    checkedAt: new Date(now).toISOString(), staleAfterSeconds: 300, observationState,
+    checkedAt: new Date(now).toISOString(), staleAfterSeconds, observationState,
+    pasofiFulfilment: { status: fulfilmentStatus, observedAt: fulfilment?.observedAt ?? null, paidUnfulfilled },
     services: serviceRegistry.map(service => {
-      const observed = observations.find(item => item.id === service.id);
+      const observed = snapshot.observations.find(item => item.id === service.id);
       return { id: service.id, name: service.name, hosting: service.hosting, url: service.url,
         dependencies: [...service.dependencies],
-        status: !observed ? "not_observed" : now - Date.parse(observed.observedAt) >= 300000 ? "stale" : observed.state,
+        status: !observed ? "not_observed" : isStale(observed.observedAt) ? "stale" : observed.state,
         lastObservedState: observed?.state ?? null, observedAt: observed?.observedAt ?? null,
         source: observed?.source ?? null, environment: observed?.environment ?? null, revision: observed?.revision ?? null,
         scope: observed?.source === "public_http" ? "Public API observation. Account, provider and customer journeys require separate acceptance." : "Private runtime observation required for workloads, storage and operational readiness.",
