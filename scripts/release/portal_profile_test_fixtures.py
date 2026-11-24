@@ -30,6 +30,7 @@ PREFIX = "onesa-portal-frontend/"
 # Portal 550e007e retains the original domain routing helper.
 # Catalog predecessor is the public blob at Portal 473d5b1b2b80.
 # Gallery sources precede the deferred canvas change, at Portal 2096ad1e42.
+# The historical dependency lock retains the exact public bytes from Portal 71813fd.
 REVIEWED_FILES = {
     PREFIX + "src/components/nvidia-reference-viewer.ts": (6365, "affbb2eddbc6fca2e280aa0ad541a8e5958b692c8a7634d89c92954fa02d9d98"),
     PREFIX + "src/components/nvidia-reference-library.tsx": (6444, "92c4eb64c6ff97542ebf5fe618d2b50a7f4e96f2dff04910698f16e379d9691c"),
@@ -58,6 +59,7 @@ REVIEWED_FILES = {
     PREFIX + "unit/onesa-identity.test.ts": (3072, "4005525a4cd4b5dc34cb402d12ea8842c6f24e8e6ffc7b2ac5d70e195024e112"),
     PREFIX + "src/components/site-footer.tsx": (2925, "aee902a898185551b5d7abb3ff511a57b9a84a30ff1e372919d2146366ce284d"),
     PREFIX + "src/components/product-overview.tsx": (8843, "8ccf113f761c363933f64c0d7f611d199eda8849e23a70bba2d6d0c2f8ce615f"),
+    PREFIX + "package-lock.json": (125183, "a14df9606964f633c89d4237cb99b182767f6dbd47adfde92835f2b0d96bd4f1"),
     PREFIX + "package.json": (3038, "e3cbc621f1713824ec3f621588ac0d13e0c3cd6d6c7688e7d64dfe85aa00774e"),
     PREFIX + "scripts/test-onesa-account.mjs": (43775, "fdd380ccad7ebef858697155c0cd235e8d62d824d54dafcea6ac3edaa24a63e0"),
     PREFIX + "src/app/api/v1/[...path]/route.ts": (5293, "7fbb4b327152af662956b0f2410c204349874ec7bda59bd6ac60f81dbb158794"),
@@ -93,6 +95,7 @@ REVIEWED_BLOBS = {
     PREFIX + "unit/onesa-identity.test.ts": "593595d58cc313a3c4be2c10e3e743e76081446f",
     PREFIX + "src/components/site-footer.tsx": "117a384565a5855fe103253f962b3d8fe2aefda4",
     PREFIX + "src/components/product-overview.tsx": "edd985c57114704bba320b1679937b702047abb6",
+    PREFIX + "package-lock.json": "53c4a13de1964c5083f01f14e7b8657a68af7cb8",
     PREFIX + "package.json": "63c3ba4fafad01f84071c7590034710017d7f2b5",
     PREFIX + "scripts/test-onesa-account.mjs": "f3f5cdd4021be407c03368b7e20c09a12a318a3b",
     PREFIX + "src/app/api/v1/[...path]/route.ts": "5271c8e0089adc388805172f47a955787a856be8",

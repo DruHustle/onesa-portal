@@ -91,8 +91,11 @@ class NvidiaScopeTests(unittest.TestCase):
             "scripts/check_tls_bundle.mjs", PREFIX + "package.json", PREFIX + "package-lock.json",
             PREFIX + "vendor/onesa-portal-minimatch-callable-1.0.0.tgz",
         }:
-            self.files[name] = (reviewed_frontend_bytes(name) if name == PREFIX + "package.json"
-                                else (ROOT / name).read_bytes())
+            self.files[name] = (
+                reviewed_frontend_bytes(name)
+                if name in {PREFIX + "package.json", PREFIX + "package-lock.json"}
+                else (ROOT / name).read_bytes()
+            )
         self.refresh()
 
     def refresh(self):
@@ -345,6 +348,15 @@ class NvidiaScopeTests(unittest.TestCase):
                 self.scope()
             self.files[path] = original
 
+    def test_current_dependency_lock_cannot_qualify_as_the_legacy_profile(self):
+        path = PREFIX + "package-lock.json"
+        current_lock = (ROOT / path).read_bytes()
+        self.assertNotEqual(current_lock, self.files[path])
+        self.files[path] = current_lock
+        self.refresh()
+        with self.assertRaisesRegex(r.Refused, "DEPENDENCY_CLOSURE_ONLY"):
+            self.scope()
+
     def test_metadata_size_is_checked_before_json_parser(self):
         archive = self.folder / "oversize.tar"
         with tarfile.open(archive, "w") as out:
@@ -493,6 +505,8 @@ class NvidiaInstallTests(unittest.TestCase):
         fixture = self.fixture
         files = fixture.github.files
         files.update(public_files())
+        lockfile = PREFIX + "package-lock.json"
+        files[lockfile] = reviewed_frontend_bytes(lockfile)
         tree = snapshot(fixture.root / "synthetic-source", fixture.root / "tool-source.tar", files)
         fixture.manifest["source_tree"] = tree
         fixture.manifest["tool_source_sha256"] = r.sha(fixture.root / "tool-source.tar")
