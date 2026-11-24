@@ -1,5 +1,5 @@
 import './local-environment.js';
-import {test,after} from 'node:test';import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
+import {test,after} from 'node:test';import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';import {mkdtemp,rm,writeFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
 if(!process.env.TEST_DATABASE_URL)throw new Error('TEST_DATABASE_URL must reference an isolated PostgreSQL test database');
 if(!new URL(process.env.TEST_DATABASE_URL).pathname.endsWith('_test'))throw new Error('Refusing to test a database without the _test suffix');
 process.env.COMPANY_ORIGIN='http://company.example.invalid';process.env.DATABASE_URL=process.env.TEST_DATABASE_URL;process.env.NODE_ENV='test';process.env.STORAGE_DIR=await mkdtemp(join(tmpdir(),'onesa-portal-test-'));process.env.CLAMAV_HOST='';process.env.MAIL_PROVIDER='smtp';process.env.SMTP_HOST='';process.env.RESEND_API_KEY='synthetic-disabled-provider';process.env.S3_BUCKET='';process.env.S3_ENDPOINT='';process.env.AWS_ENDPOINT_URL_S3='';
@@ -10,14 +10,32 @@ const password='integration-password-1234';const secret='JBSWY3DPEHPK3PXP';
 async function account(role:string){const id=randomUUID(),email=role+'-'+id+'@example.test';await db.query('INSERT INTO users(id,email,password_hash,role,mfa_secret) VALUES($1,$2,$3,$4,$5)',[id,email,passwordHash(password),role,encrypt(secret)]);return {id,email};}
 async function login(u:{id:string;email:string}){const code=randomUUID();await db.query('INSERT INTO mfa_recovery VALUES($1,$2)',[u.id,hash(code)]);const r=await app.inject({method:'POST',url:'/api/v1/auth/login',remoteAddress:`2001:db8:${u.id.slice(0,4)}:${u.id.slice(4,8)}::1`,payload:{email:u.email,password,code}});assert.equal(r.statusCode,200,r.body);return {cookie:r.cookies[0].name+'='+r.cookies[0].value,'x-csrf-token':r.json().csrf,origin:process.env.PUBLIC_ORIGIN||'http://localhost:3300'};}
 const owner=await account('owner'),editor=await account('editor'),hr=await account('hr'),business=await account('business'),viewer=await account('viewer');const ownerH=await login(owner),editorH=await login(editor),hrH=await login(hr),businessH=await login(business),viewerH=await login(viewer);
-test('Infrastructure observations require Portal administration, retain no-store and expose no raw credentials', async()=>{
+test('Infrastructure observations require Portal administration, retain no-store and expose no raw credentials', async(t)=>{
  const url='/api/v1/admin/infrastructure';
- assert.equal((await app.inject({url})).statusCode,401);
- for(const headers of [viewerH,editorH,businessH,hrH])assert.equal((await app.inject({url,headers})).statusCode,403);
+ const fixture=join(process.env.STORAGE_DIR!,'infrastructure-observations.json');
+ const previousFile=process.env.INFRASTRUCTURE_OBSERVATIONS_FILE;
+ t.after(()=>{
+   if(previousFile===undefined) delete process.env.INFRASTRUCTURE_OBSERVATIONS_FILE;
+   else process.env.INFRASTRUCTURE_OBSERVATIONS_FILE=previousFile;
+ });
+ const observedAt=new Date().toISOString();
+ await writeFile(fixture,JSON.stringify({version:1,observations:[],
+   pasofiFulfilment:{source:'owner_runtime',environment:'production',observedAt,paidUnfulfilled:2},
+ }),{mode:0o600});
+ process.env.INFRASTRUCTURE_OBSERVATIONS_FILE=fixture;
+ const anonymous=await app.inject({url});
+ assert.equal(anonymous.statusCode,401);
+ assert.ok(!anonymous.body.includes('paidUnfulfilled'));
+ for(const headers of [viewerH,editorH,businessH,hrH]){
+   const denied=await app.inject({url,headers});
+   assert.equal(denied.statusCode,403);
+   assert.ok(!denied.body.includes('paidUnfulfilled'));
+ }
  const allowed=await app.inject({url,headers:ownerH});
  assert.equal(allowed.statusCode,200,allowed.body);
  assert.equal(allowed.headers['cache-control'],'no-store');
  assert.equal(allowed.json().services.length,14);
+ assert.deepEqual(allowed.json().pasofiFulfilment,{status:'critical',observedAt,paidUnfulfilled:2});
  for (const id of ["identity", "public-documents", "internal-documents"]) {
    assert.ok(allowed.json().services.some((service: { id: string }) => service.id === id));
  }

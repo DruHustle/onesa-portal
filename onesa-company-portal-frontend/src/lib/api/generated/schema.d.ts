@@ -22158,6 +22158,13 @@ export interface operations {
                         staleAfterSeconds: 300;
                         /** @enum {string} */
                         observationState: "loaded" | "not_configured" | "unavailable";
+                        pasofiFulfilment?: {
+                            /** @enum {string} */
+                            status: "clear" | "critical" | "unavailable" | "not_observed" | "stale";
+                            /** Format: date-time */
+                            observedAt: string | null;
+                            paidUnfulfilled: number | null;
+                        };
                         services: {
                             /** @enum {string} */
                             id: "portal" | "ai" | "robot" | "farmer" | "drone" | "logistics" | "mobile" | "factory" | "pasofi" | "identity" | "public-documents" | "internal-documents" | "kubernetes" | "portainer";
