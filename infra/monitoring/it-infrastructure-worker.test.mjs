@@ -264,7 +264,9 @@ test('sign-out starts only for an approved same-origin POST', async () => {
 
 test('sign-out clears Access then sends the same browser to Auth0 with a fixed staging return', async () => {
   const stage = 'https://infrastructure-staging.example.test';
-  const env = {...audience, ...logoutBinding, INFRASTRUCTURE_ORIGIN: stage};
+  const stageIssuer = 'https://auth-staging.example.test';
+  const env = {...audience, ...logoutBinding, INFRASTRUCTURE_ORIGIN: stage,
+    INFRASTRUCTURE_AUTH0_LOGOUT_ISSUER: stageIssuer + '/'};
   const start = () => worker.fetch(new Request(stage + '/dashboard/logout?returnTo=https://outside.example.test', {
     method: 'POST', headers: {Origin: stage},
   }), env, accessContext);
@@ -283,7 +285,7 @@ test('sign-out clears Access then sends the same browser to Auth0 with a fixed s
   const match = await worker.fetch(new Request(landing, {headers: cookieHeader}), env);
   const auth0 = new URL(match.headers.get('location'));
   assert.equal(match.status, 303);
-  assert.equal(auth0.origin + auth0.pathname, 'https://auth.onesa.eu/oidc/logout');
+  assert.equal(auth0.origin + auth0.pathname, stageIssuer + '/oidc/logout');
   assert.deepEqual(Object.fromEntries(auth0.searchParams), {
     client_id: logoutClient, post_logout_redirect_uri: stage + '/',
   });
@@ -299,6 +301,28 @@ test('sign-out clears Access then sends the same browser to Auth0 with a fixed s
     assert.equal(response.headers.has('location'), false);
     assert.equal(response.headers.has('set-cookie'), false);
   }
+});
+
+test('staging logout requires its separate issuer and production pins the branded Auth0 origin', async () => {
+  const stage = 'https://infrastructure-staging.example.test';
+  for (const issuer of [undefined, 'https://auth.onesa.eu/', 'https://onesa.eu.auth0.com', stage,
+    'http://auth-staging.example.test', 'https://auth-staging.example.test/oidc/logout']) {
+    const env = {...audience, ...logoutBinding, INFRASTRUCTURE_ORIGIN: stage,
+      INFRASTRUCTURE_AUTH0_LOGOUT_ISSUER: issuer};
+    const dashboard = await worker.fetch(new Request(stage + '/dashboard'), env, accessContext);
+    assert.match(await dashboard.text(), /href="\/cdn-cgi\/access\/logout">Sign out</, issuer);
+  }
+
+  const env = {...audience, ...logoutBinding, INFRASTRUCTURE_AUTH0_LOGOUT_ISSUER: 'https://auth-staging.example.test'};
+  const started = await worker.fetch(new Request(base + '/dashboard/logout', {
+    method: 'POST', headers: {Origin: base},
+  }), env, accessContext);
+  const [cookie] = started.headers.get('set-cookie').split(';');
+  const landing = new URL(started.headers.get('location')).searchParams.get('returnTo');
+  const response = await worker.fetch(new Request(landing, {headers: {Cookie: cookie}}), env);
+  const auth0 = new URL(response.headers.get('location'));
+  assert.equal(auth0.origin + auth0.pathname, 'https://auth.onesa.eu/oidc/logout');
+  assert.equal(auth0.searchParams.get('post_logout_redirect_uri'), base + '/');
 });
 
 test('Portal DB-backed readiness checks an exact bounded JSON response, not the homepage', async () => {

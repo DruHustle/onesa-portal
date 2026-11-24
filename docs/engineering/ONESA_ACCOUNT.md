@@ -96,7 +96,9 @@ session, especially Cloudflare Access and native offline access.
 IT Infrastructure can end both its Cloudflare Access session and the branded
 Auth0 SSO session. Configure `INFRASTRUCTURE_AUTH0_LOGOUT_CLIENT_ID` with the
 dashboard's configured Auth0 client and register the exact dashboard origin
-with its trailing `/` as an application logout return. The approved dashboard
+with its trailing `/` as an application logout return. For staging, also set
+`INFRASTRUCTURE_AUTH0_LOGOUT_ISSUER` to the separate HTTPS issuer used by its
+Access provider. The approved dashboard
 submits a same-origin form, ends Access, and resumes at the public landing
 through a short-lived browser cookie before continuing to Auth0. Keep the
 landing reachable after Access logout and verify that signing in again prompts
