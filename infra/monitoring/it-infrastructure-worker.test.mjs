@@ -240,7 +240,9 @@ test('only the protected dashboard offers the configured SSO sign-out form', asy
   }
   const env = {...audience, ...logoutBinding};
   const response = await worker.fetch(new Request(base + '/dashboard'), env, accessContext);
-  assert.match(response.headers.get('content-security-policy'), /form-action 'self'/);
+  assert.ok(response.headers.get('content-security-policy').split('; ').includes(
+    "form-action 'self' https://auth.onesa.eu/oidc/logout",
+  ));
   assert.equal(response.headers.get('referrer-policy'), 'same-origin');
   assert.match(await response.text(), /<form method="post" action="\/dashboard\/logout"[^>]*><button[^>]*>Sign out/);
   const landing = await worker.fetch(new Request(base), env);
@@ -269,6 +271,10 @@ test('sign-out clears Access then sends the same browser to Auth0 with a fixed s
   const stageIssuer = 'https://auth-staging.example.test';
   const env = {...audience, ...logoutBinding, INFRASTRUCTURE_ORIGIN: stage,
     INFRASTRUCTURE_AUTH0_LOGOUT_ISSUER: stageIssuer + '/'};
+  const stageDashboard = await worker.fetch(new Request(stage + '/dashboard'), env, accessContext);
+  const stagePolicy = stageDashboard.headers.get('content-security-policy');
+  assert.ok(stagePolicy.split('; ').includes(`form-action 'self' ${stageIssuer}/oidc/logout`));
+  assert.doesNotMatch(stagePolicy, /auth\.onesa\.eu/);
   const start = () => worker.fetch(new Request(stage + '/dashboard/logout?returnTo=https://outside.example.test', {
     method: 'POST', headers: {Origin: stage},
   }), env, accessContext);

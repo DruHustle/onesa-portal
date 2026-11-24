@@ -85,6 +85,7 @@ const scriptPaths = new Set(['/dashboard/dashboard.js', '/dashboard.js']);
 const statusPaths = new Set(['/dashboard/api/status', '/api/status']);
 const logoutPath = '/dashboard/logout';
 const accessLogoutPath = '/cdn-cgi/access/logout';
+const auth0LogoutPath = '/oidc/logout';
 const auth0Origin = 'https://auth.onesa.eu';
 const logoutCookie = '__Host-onesa-infrastructure-logout';
 const logoutStateParam = 'finish_logout';
@@ -218,7 +219,7 @@ function completeLogout(url, request, binding, headers) {
   if (!state || duplicate !== undefined || !logoutStatePattern.test(state)) return null;
   const expectedCookie = `${logoutCookie}=${state}`;
   if (!(request.headers.get('Cookie') || '').split(';').some(cookie => cookie.trim() === expectedCookie)) return null;
-  const auth0Logout = new URL('/oidc/logout', binding.issuer);
+  const auth0Logout = new URL(auth0LogoutPath, binding.issuer);
   auth0Logout.searchParams.set('client_id', binding.client);
   auth0Logout.searchParams.set('post_logout_redirect_uri', new URL('/', url.origin).href);
   return logoutRedirect(auth0Logout, headers, '', 0);
@@ -257,7 +258,10 @@ export default {async fetch(request, env, context){
    h.set('Content-Type', 'text/html; charset=utf-8');
    body = PAGE;
    if (logout) {
-     h.set('Content-Security-Policy', headers['Content-Security-Policy'].replace("form-action 'none'", "form-action 'self'"));
+     // Chromium enforces form-action across redirects. Allow the exact IdP
+     // logout destination so the same-origin POST can finish provider sign-out.
+     const providerLogout = new URL(auth0LogoutPath, logout.issuer);
+     h.set('Content-Security-Policy', headers['Content-Security-Policy'].replace("form-action 'none'", `form-action 'self' ${providerLogout.href}`));
      // Form-navigation POSTs need an Origin header. A same-origin referrer
      // policy preserves it without sending a referrer to any external tool.
      h.set('Referrer-Policy', 'same-origin');

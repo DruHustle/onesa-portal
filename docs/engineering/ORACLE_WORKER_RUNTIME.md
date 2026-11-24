@@ -69,6 +69,8 @@ maintenance/fencing, and coordinated API/worker/backup configuration through the
 protected procedure. Never promote an external copy because a connection timed out.
 Other products' databases are unchanged. See [the focused tests](BUILD_AND_TEST.md#private-postgresql-target-preparation).
 
+The Oracle supplementary Portal transport keeps the newly read-back encrypted archive and at least two distinct prior Portal archive keys before pruning older snapshots. It applies the existing seven-day filter only to archives outside that minimum, so monthly runs can retain recovery points from prior months. This rule does not configure provider lifecycle expiration or establish recovery validation of retained objects.
+
 ## Production database attachment
 
 Since 22 November 2026 the production API and worker use a private PostgreSQL

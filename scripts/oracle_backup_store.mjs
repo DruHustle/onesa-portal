@@ -3,6 +3,24 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {S3Client,PutObjectCommand,GetObjectCommand,ListObjectsV2Command,DeleteObjectCommand} from '@aws-sdk/client-s3';
 const MAX=64*1024*1024,PREFIX='.onesa-portal-backups/v1/';
+const RETENTION_DAYS = 7;
+const MINIMUM_PORTAL_ARCHIVES = 3;
+const PORTAL_ARCHIVE = /^\.onesa-portal-backups\/v1\/[a-f0-9]{32}\.json$/;
+function olderPortalArchives(entries, currentObject, now) {
+ const timestamps = new Map();
+ for (const {Key, LastModified} of entries) {
+  if (Key === currentObject || !PORTAL_ARCHIVE.test(Key) || !(LastModified instanceof Date)) continue;
+  const timestamp = LastModified.valueOf();
+  if (!Number.isFinite(timestamp)) continue;
+  timestamps.set(Key, Math.max(timestamp, timestamps.get(Key) ?? timestamp));
+ }
+ const eligible = [...timestamps].sort((left, right) =>
+  right[1] - left[1] || left[0].localeCompare(right[0]));
+ const cutoff = now - RETENTION_DAYS * 86400000;
+ return eligible.slice(MINIMUM_PORTAL_ARCHIVES - 1)
+  .filter(([, timestamp]) => timestamp < cutoff)
+  .map(([key]) => key);
+}
 const input=JSON.parse(fs.readFileSync(0,'utf8'));
 const digest=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 const require=value=>{if(!value)throw Error('Backup safety check failed');};
@@ -35,8 +53,12 @@ try{
   await s3.send(new PutObjectCommand({Bucket:bucket,Key:object,Body:body,ServerSideEncryption:'AES256',ContentType:'application/json'}));
   require(digest(await get(object))===digest(body));
   let token,listed=[],pages=0;do{const page=await s3.send(new ListObjectsV2Command({Bucket:bucket,Prefix:PREFIX,ContinuationToken:token}));listed.push(...(page.Contents||[]));token=page.NextContinuationToken;require(++pages<10);}while(token);
-  let removed=0;for(const item of listed){if(new RegExp('^'+PREFIX.replaceAll('.','\\.')+'[a-f0-9]{32}\\.json$').test(item.Key)&&item.Key!==object&&item.LastModified&&Date.now()-item.LastModified.getTime()>7*86400000){await s3.send(new DeleteObjectCommand({Bucket:bucket,Key:item.Key}));removed++;}}
-  console.log(JSON.stringify({passed:true,id:input.id,object_key:object,ciphertext_sha256:digest(body),dump_sha256:digest(dump),object_count:objects.length,source_bytes:total,key_id:keyId,retention_days:7,expired_archives_removed:removed,off_instance_storage_verified:true}));
+  let removed = 0;
+  for (const key of olderPortalArchives(listed, object, Date.now())) {
+   await s3.send(new DeleteObjectCommand({Bucket:bucket,Key:key}));
+   removed++;
+  }
+  console.log(JSON.stringify({passed:true,id:input.id,object_key:object,ciphertext_sha256:digest(body),dump_sha256:digest(dump),object_count:objects.length,source_bytes:total,key_id:keyId,retention_days:RETENTION_DAYS,retention_minimum_archives:MINIMUM_PORTAL_ARCHIVES,expired_archives_removed:removed,off_instance_storage_verified:true}));
  }else if(input.action==='read'){
   require(new RegExp('^'+PREFIX.replaceAll('.','\\.')+'(?:[a-f0-9]{32}\\.json|keys/[a-f0-9]{64}\\.enc)$').test(input.key)||/^\.onesa-database-backups\/v1\/(?:ai|robot)\/[a-f0-9]{32}\.json$/.test(input.key));
   const bytes=await get(input.key);
