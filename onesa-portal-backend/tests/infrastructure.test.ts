@@ -144,7 +144,7 @@ test("The collector maps deployed health contracts to the administrator's observ
         ? [{ status: "ready", mode: "simulation", physical_actuation: false }, 200]
         : [{ detail: "Remote simulation journal requires recovery" }, 503]],
       ["https://mobile.onesa.eu/api/healthz", [{ status: "ok", serviceStatus: "prelaunch" }, 200]],
-      ["https://api.pasofi.onesa.eu/health/live", [{ status: "ok", service: "gateway" }, 200]],
+      ["https://api.pasofi.mobile.onesa.eu/health/live", [{ status: "ok", service: "gateway" }, 200]],
       ["https://portal.onesa.eu/api/v1/health", [{ status: "ok" }, 503]],
       ["https://platform.onesa.eu/ready", process.env.AI_FIXTURE_READY === "1"
         ? [{ status: "ready", backend: "cloudflare" }, 200]
