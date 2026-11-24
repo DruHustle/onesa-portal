@@ -74,6 +74,11 @@ async function verifiedPasofiCapabilities(response){
 
 const infrastructureOrigin = 'https://it-infrastructure.onesa.eu';
 const accountOrigin = 'https://account.onesa.eu';
+const productionRegistrationOrigins = new Set([
+  accountOrigin,
+  'https://auth.onesa.eu',
+  'https://onesa.eu.auth0.com',
+]);
 const administratorClaim = 'https://onesa.eu/claims/infrastructure_admin';
 const dashboardPaths = new Set(['/dashboard', '/dashboard/']);
 const scriptPaths = new Set(['/dashboard/dashboard.js', '/dashboard.js']);
@@ -134,6 +139,13 @@ function registrationLink(origin) {
   }
 }
 
+function registrationOriginFor(currentOrigin, stagedAccountOrigin) {
+  if (currentOrigin === infrastructureOrigin) return accountOrigin;
+  // A staged registration must not create a pending request in production.
+  if (stagedAccountOrigin === currentOrigin || productionRegistrationOrigins.has(stagedAccountOrigin)) return undefined;
+  return stagedAccountOrigin;
+}
+
 function publicEntry(registrationOrigin) {
   return entryPage({
     title: 'IT Infrastructure',
@@ -175,7 +187,7 @@ export default {async fetch(request, env, context){
  let body="",status=200;
  if (path === '/' || path === '/index.html' || path === '/access-requested') {
    h.set('Content-Type', 'text/html; charset=utf-8');
-   const registrationOrigin = url.origin === infrastructureOrigin ? accountOrigin : env?.INFRASTRUCTURE_ACCOUNT_ORIGIN;
+    const registrationOrigin = registrationOriginFor(url.origin, env?.INFRASTRUCTURE_ACCOUNT_ORIGIN);
    body = path === '/access-requested' ? accessRequest : publicEntry(registrationOrigin);
  }
  else if (dashboardPaths.has(path)) {h.set('Content-Type', 'text/html; charset=utf-8');body = PAGE}
