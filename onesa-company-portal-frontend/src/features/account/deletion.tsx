@@ -9,15 +9,15 @@ const copy = {
   en: {
     title: "Request account deletion",
     scope:
-      "You can request deletion of your shared Onesa account and associated product data, including Onesa Drone. This affects all products using that account.",
+      "You can request deletion of your account and associated product data, including Onesa Drone. This affects all products using that account.",
     review:
       "The privacy team reviews the request and contacts you about deletion and any records it must retain.",
     checking: "Checking your account…",
-    signIn: "Sign in with Onesa to make a request",
+    signIn: "Sign in to make a request",
     help: "If you cannot sign in, send your request to the privacy contact.",
     identity: "Signed in as",
     confirm:
-      "I want to request deletion of this Onesa account and its associated data.",
+      "I want to request deletion of this account and its associated data.",
     send: "Submit deletion request",
     success:
       "Your request was recorded. Keep this reference when contacting the privacy team.",
