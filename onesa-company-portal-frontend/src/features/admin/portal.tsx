@@ -514,6 +514,9 @@ export function AdminPortal({
         <span>
           {user.email} · {user.role}
         </span>
+        <button onClick={() => navigate(() => window.location.assign("/intranet"))} disabled={busy || unsaved.pending}>
+          Intranet
+        </button>
         <button
           onClick={() =>
             navigate(() => {
