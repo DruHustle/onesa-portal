@@ -69,7 +69,9 @@ test('Malformed or hosted loopback origins cannot publish canonical URLs',()=>{
 function configure(){process.env.SITE_URL='https://onesa.eu';process.env.PORTAL_URL='https://portal.onesa.eu';process.env.PUBLIC_ORIGIN=process.env.PORTAL_URL;}
 test('Configured hosts separate company and portal and reject other hosts',()=>{
  configure();assert.equal(surface('https://onesa.eu'),'company');assert.equal(surface('https://portal.onesa.eu'),'portal');assert.equal(surface('https://onesa.eu.attacker.invalid'),'unknown');assert.equal(surface('https://unknown.vercel.app'),'unknown');
- assert.equal(routeDestination('https://portal.onesa.eu','/'),'https://portal.onesa.eu/account');
+ assert.equal(routeDestination('https://portal.onesa.eu','/'),'https://portal.onesa.eu/intranet');
+ assert.equal(routeDestination('https://onesa.eu','/intranet'),'https://portal.onesa.eu/intranet');
+ assert.equal(routeDestination('https://portal.onesa.eu','/intranet'),null);
  assert.equal(routeDestination('https://onesa.eu','/admin/users'),'https://portal.onesa.eu/admin/users');
  assert.equal(routeDestination('https://portal.onesa.eu','/en/contact'),'https://onesa.eu/en/contact');
  assert.equal(routeDestination('https://portal.onesa.eu','/admin'),null);
@@ -105,5 +107,5 @@ test('Portal sign-in, password recovery and registration remain on the Portal ho
  configure();
  for(const path of ['/account','/account/register','/account/security','/admin'])assert.equal(routeDestination('https://portal.onesa.eu',path),null,`${path} must be served by the Portal host`);
  for(const path of ['/account','/account/register','/account/security','/access/register'])assert.equal(routeDestination('https://onesa.eu',path),`https://portal.onesa.eu${path}`,`${path} must not land on the public Company site`);
- assert.equal(routeDestination('https://portal.onesa.eu','/'), 'https://portal.onesa.eu/account');
+ assert.equal(routeDestination('https://portal.onesa.eu','/'), 'https://portal.onesa.eu/intranet');
 });
