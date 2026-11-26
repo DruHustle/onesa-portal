@@ -132,12 +132,12 @@ export function EngineeringSignIn({ uid, environment, shared, fresh, legacyFixtu
     {!openingDocs && <p className="engineering-signin-intro">{confirming ? <>Continue as <strong>{linkEmail}</strong>.</> : continuingSession ? <>Continue as <strong>{onesaAccount}</strong>.</> : "Use your approved email to continue."}</p>}
     <div id="engineering-sign-in">
       {openingDocs ? <p role="status">Please wait…</p> : <>
-      {notice && <p role="alert">{notice}{registrationRequired && <> <a href={registrationPath}>Create your Onesa account</a></>}</p>}
+      {notice && <p role="alert">{notice}{registrationRequired && <> <a href={registrationPath}>Sign up</a></>}</p>}
       {restartRequired && <><a className="button" href="/engineering">Start a new sign-in</a>{central && <a href="/account">Open Company Portal account</a>}</>}
       {!ready && !notice && <p role="status">Preparing secure sign-in…</p>}
       {ready && enrollment && !confirming && <div>
         {enrollment === "pending" ? <p role="status">The owner is reviewing your Engineering Docs access request. You will receive the decision by email.</p> :
-          <form onSubmit={submit}><p>Request Engineering Docs access with your verified Onesa account. Your existing sign-in will be used after approval.</p><button className="button" type="submit" disabled={busy || reauthenticate}>{busy ? "Requesting…" : "Use my Onesa account for Docs"}</button></form>}
+          <form onSubmit={submit}><p>Request Engineering Docs access with your verified email address. Your existing sign-in will be used after approval.</p><button className="button" type="submit" disabled={busy || reauthenticate}>{busy ? "Requesting…" : "Use my Onesa account for Docs"}</button></form>}
       </div>}
       {ready && (!enrollment || confirming) && <>
         {!confirming && !continuingSession && <div className="signin-methods" role="group" aria-label="Sign-in method"><button type="button" disabled={busy} aria-pressed={method === "link"} onClick={() => { setMethod("link"); setLinkOnesaAccount(false); setNotice(""); setRegistrationRequired(false); }}>Email a sign-in link</button><button type="button" disabled={busy} aria-pressed={method === "password"} onClick={() => { setMethod("password"); setLinkOnesaAccount(false); setNotice(""); setRegistrationRequired(false); }}>Email and password</button></div>}
@@ -152,8 +152,8 @@ export function EngineeringSignIn({ uid, environment, shared, fresh, legacyFixtu
         {linkSent && <div className="engineering-link-sent"><p className="engineering-sent-notice" ref={sentRef} tabIndex={-1} role="status">Sent.</p><button className="button" type="button" disabled={busy || resendSeconds > 0} onClick={() => { if (!email) { setSent(false); return; } formRef.current?.requestSubmit(); }}>Send another link{resendSeconds > 0 ? ` (${resendSeconds}s)` : ""}</button></div>}
       </>}
       <div className="engineering-signin-support">
-        {!central && !enrollment && !confirming && !sent && !registrationRequired && <p className="signin-registration">First time here? <a href={registrationPath}>Create your Onesa account</a></p>}
-        <details className="signin-help"><summary>Help with access</summary><p>New access requires owner approval. Existing approvals are retained.</p>{onesaSignInPath && <><p>Linking keeps your existing Engineering Docs approval. After linking, use your Onesa account to sign in.</p><p>Signing out of Onesa does not sign out of an existing Engineering Docs access session.</p></>}{sent && <p><a href={registrationPath}>Create your Onesa account</a></p>}<p><a href="/engineering">Start a new sign-in</a> · <a href="https://onesa.eu/en/contact">Contact Onesa</a></p></details>
+        {!central && !enrollment && !confirming && !sent && !registrationRequired && <p className="signin-registration">First time here? <a href={registrationPath}>Sign up</a></p>}
+        <details className="signin-help"><summary>Help with access</summary><p>New access requires owner approval. Existing approvals are retained.</p>{onesaSignInPath && <><p>Linking keeps your existing Engineering Docs approval. After linking, use your Onesa account to sign in.</p><p>Signing out of Onesa does not sign out of an existing Engineering Docs access session.</p></>}{sent && <p><a href={registrationPath}>Sign up</a></p>}<p><a href="/engineering">Start a new sign-in</a> · <a href="https://onesa.eu/en/contact">Contact Onesa</a></p></details>
       </div>
       </>}
     </div>

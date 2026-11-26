@@ -42,16 +42,16 @@ export function AuthenticatorSetup({ sharedAccount = false }: { sharedAccount?: 
         if (enrollment) { setEnrollment(null); setError("This setup has expired. Enter your email and password to start again. If setup already completed, use your authenticator to sign in."); }
         else setError("Setup is available after administrator registration and approval. Check your registered email and password. Already enrolled? Sign in with your existing authenticator or a saved recovery code.");
       } else if (reason instanceof ApiError && reason.status === 401 && enrollment) {
-        setError("That code was not accepted. Enter the current six-digit code from the Onesa account in your authenticator app.");
+        setError("That code was not accepted. Enter the current six-digit code from the account in your authenticator app.");
       } else setError(reason instanceof Error ? reason.message : "Setup could not be completed. Please try again.");
     } finally { pending.current = false; setBusy(false); }
   }
 
   return <main className={styles.shell}><section className={styles.card} aria-labelledby="authenticator-title">
     <a className="wordmark" href="https://onesa.eu/" aria-label="Onesa home">onesa<span>UG</span></a>
-    <p className={styles.context}>{sharedAccount ? "ONESA ACCOUNT · SECURITY" : "ONESA PORTAL · ADMINISTRATOR SETUP"}</p>
+    <p className={styles.context}>{sharedAccount ? "ACCOUNT SECURITY" : "ONESA PORTAL · ADMINISTRATOR SETUP"}</p>
     <h1 id="authenticator-title" ref={heading} tabIndex={-1}>{step === 3 ? "Save your recovery codes" : "Set up your authenticator"}</h1>
-    <p className={styles.intro}>{step === 1 ? (sharedAccount ? "Secure your single Onesa account. This authenticator protects administration and sensitive product operations." : "After registration and approval, secure your account before your first sign-in.") : step === 2 ? "Add an account in your authenticator app. Choose manual setup, enter the key below and select time-based codes." : "Each code works once if you cannot use your authenticator. Store these securely before continuing."}</p>
+    <p className={styles.intro}>{step === 1 ? (sharedAccount ? "Secure your account. This authenticator protects administration and sensitive product operations." : "After registration and approval, secure your account before your first sign-in.") : step === 2 ? "Add an account in your authenticator app. Choose manual setup, enter the key below and select time-based codes." : "Each code works once if you cannot use your authenticator. Store these securely before continuing."}</p>
     <p className={styles.context}>STEP {step} OF 3</p>
     {step !== 3 && <form onSubmit={submit} aria-busy={busy}><fieldset disabled={busy}>
       <legend className={styles.srOnly}>{enrollment ? "Verify authenticator setup" : "Verify your approved account"}</legend>
@@ -69,13 +69,13 @@ export function AuthenticatorSetup({ sharedAccount = false }: { sharedAccount?: 
     {step === 3 && <>
       <ul className={styles.recoveryCodes} aria-label="One-use recovery codes">{codes.map(code => <li key={code}><code>{code}</code></li>)}</ul>
       <label className="check"><input type="checkbox" checked={saved} onChange={event => setSaved(event.target.checked)} />I have saved my recovery codes securely.</label>
-      <button className="button" disabled={!saved} onClick={() => { setCodes([]); window.location.replace(returnPath); }}>{sharedAccount ? "Continue to Onesa sign-in" : "Continue to administrator sign-in"}</button>
+      <button className="button" disabled={!saved} onClick={() => { setCodes([]); window.location.replace(returnPath); }}>{sharedAccount ? "Continue to sign-in" : "Continue to administrator sign-in"}</button>
       <p className={styles.intro}>Wait for your authenticator’s next code, or use a saved recovery code to sign in. Setup does not sign you in automatically.</p>
     </>}
     {error && <p role="alert" className={styles.notice}>{error}</p>}
     <div className={styles.support}>
       {step !== 3 && <a href={returnPath}>Already enrolled? Sign in</a>}
-      <details><summary>Help with setup</summary><p>{sharedAccount ? "Use your verified Onesa account and its password. Setup adds MFA for all your products; it does not grant additional product access or replace an existing authenticator." : "You need an approved administrator account and its registered password. This page cannot replace existing MFA or reset your account. Engineering Docs access requires its own approval."}</p><a href={sharedAccount ? "/account/register" : "/account/register?next=/admin"}>{sharedAccount ? "Create your Onesa account" : "Register for administrator access"}</a><p><a href="https://onesa.eu/en/contact">Contact Onesa</a></p></details>
+      <details><summary>Help with setup</summary><p>{sharedAccount ? "Use your verified account and its password. Setup adds MFA for all your products; it does not grant additional product access or replace an existing authenticator." : "You need an approved administrator account and its registered password. This page cannot replace existing MFA or reset your account. Engineering Docs access requires its own approval."}</p><a href={sharedAccount ? "/account/register" : "/account/register?next=/admin"}>{sharedAccount ? "Create your account" : "Register for administrator access"}</a><p><a href="https://onesa.eu/en/contact">Contact Onesa</a></p></details>
     </div>
   </section></main>;
 }

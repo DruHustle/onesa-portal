@@ -14,9 +14,9 @@ export function ManagedAccountEntry({ accountUrl, children }: { accountUrl: stri
   if (confirmEmail) return children;
   return <main className={styles.shell}>
     <section className={styles.card} aria-labelledby="account-title">
-      <h1 id="account-title">Onesa Account</h1>
-      {accountUrl ? <a href={accountUrl} referrerPolicy="no-referrer">Continue with Onesa</a>
-        : <p role="status">Onesa Account is temporarily unavailable. Try again later.</p>}
+      <h1 id="account-title">Sign in</h1>
+      {accountUrl ? <a href={accountUrl} referrerPolicy="no-referrer">Sign in</a>
+        : <p role="status">Sign-in is temporarily unavailable. Try again later.</p>}
     </section>
   </main>;
 }
