@@ -46,8 +46,12 @@ const legacyStaffCredentials = new Set([
 export function legacyStaffCredentialOperation(id?: string) {
   return id !== undefined && legacyStaffCredentials.has(id);
 }
-export function managedPortalEnabled() {
+export function legacyPortalAuthenticationDisabled() {
   return process.env.ONESA_IDENTITY_PORTAL_LOGIN === "managed";
+}
+export function managedPortalEnabled() {
+  return legacyPortalAuthenticationDisabled() ||
+    process.env.ONESA_IDENTITY_PORTAL_LOGIN === "transition";
 }
 
 export function portalReturnPath(value: unknown) {

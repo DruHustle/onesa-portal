@@ -521,6 +521,40 @@ test("managed Portal callback verifies the signed grant and keeps an existing ed
     );
     assert.equal((await app.inject(await start())).statusCode, 403);
 
+    const existingOwner = randomUUID();
+    const legacyToken = randomUUID() + randomUUID();
+    await db.query(
+      "INSERT INTO users(id,email,password_hash,role) VALUES ($1,$2,'unused','owner')",
+      [existingOwner, existingOwner + "@example.invalid"],
+    );
+    await db.query(
+      "INSERT INTO sessions(token_hash,user_id,csrf,expires_at) VALUES($1,$2,$3,now()+interval '1 minute')",
+      [hash(legacyToken), existingOwner, randomUUID()],
+    );
+    const existingSession = {
+      url: "/api/v1/auth/me",
+      headers: { cookie: "onesa_session=" + legacyToken },
+    };
+    assert.equal((await app.inject(existingSession)).statusCode, 401);
+
+    process.env.ONESA_IDENTITY_PORTAL_LOGIN = "transition";
+    try {
+      const transition = await buildApp({
+        logging: false,
+        managedPortalProvider: provider,
+      });
+      try {
+        assert.equal((await transition.inject(existingSession)).statusCode, 200);
+        const managedStart = await transition.inject({ url: prefix + "/start?next=%2Fadmin" });
+        assert.equal(managedStart.statusCode, 303);
+        assert.equal(new URL(managedStart.headers.location!).searchParams.get("code_challenge_method"), "S256");
+      } finally {
+        await transition.close();
+      }
+    } finally {
+      process.env.ONESA_IDENTITY_PORTAL_LOGIN = "managed";
+    }
+
     assert.equal(portalReturnPath("//other.example/"), "/admin");
   } finally {
     await app.close();
