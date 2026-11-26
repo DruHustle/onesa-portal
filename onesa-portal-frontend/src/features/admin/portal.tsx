@@ -121,6 +121,7 @@ export function AdminPortal({
   identityAdmin = null,
   identityAdminRequired = false,
   managedLogin = false,
+  internalDocumentsUrl,
 }: {
   environment?: "PRODUCTION" | "STAGING" | "DEVELOPMENT";
   accessEnabled?: boolean;
@@ -129,6 +130,7 @@ export function AdminPortal({
   identityAdmin?: string | null;
   identityAdminRequired?: boolean;
   managedLogin?: boolean;
+  internalDocumentsUrl?: string;
 }) {
   const [user, setUser] = useState<User | null>(null),
     [loading, setLoading] = useState(true),
@@ -511,6 +513,10 @@ export function AdminPortal({
             <span className="environment-label">{environment}</span>
           )}
         </div>
+        <nav className="admin-actions" aria-label="Onesa Intranet">
+          <a href="/intranet">Intranet</a>
+          {internalDocumentsUrl && <a href={internalDocumentsUrl}>Internal Documents</a>}
+        </nav>
         <span>
           {user.email} · {user.role}
         </span>
