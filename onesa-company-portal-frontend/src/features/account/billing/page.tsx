@@ -42,7 +42,7 @@ export function BillingPage() {
   }, []);
 
   return <main>
-    <nav className="onesa-billing" aria-label="Account navigation"><a href="/account">Onesa account</a></nav>
+    <nav className="onesa-billing" aria-label="Account navigation"><a href="/account">account</a></nav>
     {state !== "ready" && <section className="onesa-billing" aria-labelledby="billing-page-title">
       <h1 id="billing-page-title">Billing</h1>
       {state === "loading" && <p role="status">Loading your billing account…</p>}
