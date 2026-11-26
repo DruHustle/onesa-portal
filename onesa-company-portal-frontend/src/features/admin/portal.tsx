@@ -482,7 +482,7 @@ export function AdminPortal({
         <div className="admin-login">
           <h1 style={{ fontSize: "2rem" }}>Sign in</h1>
           {sessionError&&<div role="alert"><p>{sessionError}</p><button type="button" disabled={sessionChecking} onClick={()=>setSessionAttempt(value=>value+1)}>Retry session check</button></div>}{sessionChecking&&<p role="status">Checking your Portal session…</p>}
-          <p><a className="button" href={accountEntry}>Continue with Onesa</a></p>
+          <p><a className="button" href={accountEntry}>Sign in</a></p>
           {recovery.length > 0 && (
             <div className="admin-notice">
               <p>Save these one-use recovery codes securely:</p>
@@ -1230,7 +1230,7 @@ export function AdminPortal({
             )}
             {!identityAdminRequired && tab === "Users" && (
               <p>
-                {identityEnabled && <><a href="/account?tab=access#access">Manage shared accounts and product access</a>. Normal product users register once from their Onesa account. </>}
+                {identityEnabled && <><a href="/account?tab=access#access">Manage shared accounts and product access</a>. Normal product users register once from their account. </>}
                 Normal access: register → verify email → owner approval. A
                 Portal role grants business-workspace permissions. Engineering
                 membership is separate, and the provider’s approved-email policy
