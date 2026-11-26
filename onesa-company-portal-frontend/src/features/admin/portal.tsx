@@ -136,7 +136,7 @@ export function AdminPortal({
     [notice, setNotice] = useState(""),
     [tab, setTab] = useState<Tab>("Dashboard"),
     [total, setTotal] = useState(0);
-  const [accountEntry, setAccountEntry] = useState("/account?next=/admin");
+  const [accountEntry, setAccountEntry] = useState(() => managedLogin ? "/api/v1/auth/managed/start?next=%2Fadmin" : "/account?next=/admin");
   const [sessionAttempt,setSessionAttempt]=useState(0),[sessionError,setSessionError]=useState(''),[sessionChecking,setSessionChecking]=useState(false);
   const [queues, setQueues] = useState<Partial<Record<Tab, QueueState>>>({});
   const queue = queues[tab] || emptyQueue(),
@@ -482,7 +482,7 @@ export function AdminPortal({
         <div className="admin-login">
           <h1 style={{ fontSize: "2rem" }}>Sign in</h1>
           {sessionError&&<div role="alert"><p>{sessionError}</p><button type="button" disabled={sessionChecking} onClick={()=>setSessionAttempt(value=>value+1)}>Retry session check</button></div>}{sessionChecking&&<p role="status">Checking your Portal session…</p>}
-          <p><a className="button" href={accountEntry}>Continue with Onesa</a></p>
+          <p><a className="button" href={accountEntry}>Sign in</a></p>
           {recovery.length > 0 && (
             <div className="admin-notice">
               <p>Save these one-use recovery codes securely:</p>
