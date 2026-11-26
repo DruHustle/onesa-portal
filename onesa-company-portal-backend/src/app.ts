@@ -1,4 +1,4 @@
-import { legacyStaffCredentialOperation, managedConfig, managedPortalEnabled, registerManagedPortal, type PortalProvider } from "./auth/managed-portal.js";
+import { legacyPortalAuthenticationDisabled, legacyStaffCredentialOperation, managedConfig, managedPortalEnabled, registerManagedPortal, type PortalProvider } from "./auth/managed-portal.js";
 import { registerInfrastructure } from "./operations/infrastructure.js";
 import { revokeAccountIdentity } from "./identity/accounts.js";
 import { externalIdentityAdministration, delegatedAccountOperation } from "./identity/administration.js";
@@ -42,7 +42,7 @@ const publicSchema=(operationId:string,tag:string)=>({operationId,tags:[tag],sec
 const adminSchema=(operationId:string,tag:string)=>({operationId,tags:[tag],security:[{sessionCookie:[]}],description:'Authenticated. Server-side role checks apply. Mutations require X-CSRF-Token.'});
 function clientAddress(req:FastifyRequest){const supplied=req.headers['x-portal-proxy-key'];const forwarded=req.headers['x-portal-client-ip'];return env.PROXY_SHARED_KEY&&supplied===env.PROXY_SHARED_KEY&&typeof forwarded==='string'&&/^[a-fA-F0-9:.]{1,64}$/.test(forwarded)?forwarded:req.ip;}
 async function limit(key:string,max:number,seconds:number){const r=await db.query("INSERT INTO rate_limits(key,hits,expires_at) VALUES($1,1,now()+$2*interval '1 second') ON CONFLICT(key) DO UPDATE SET hits=CASE WHEN rate_limits.expires_at<now() THEN 1 ELSE rate_limits.hits+1 END,expires_at=CASE WHEN rate_limits.expires_at<now() THEN now()+$2*interval '1 second' ELSE rate_limits.expires_at END RETURNING hits",[key,seconds]);if(r.rows[0].hits>max)throw new HttpError(429,'RATE_LIMIT','Too many requests. Please try later.');}
-async function auth(req:FastifyRequest){const raw=req.cookies.onesa_session;if(!raw)throw new HttpError(401,'AUTH_REQUIRED','Sign in required');const result=await db.query('SELECT u.id,u.role,u.email,s.csrf FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now() AND NOT u.disabled AND ((s.managed_expires_at IS NOT NULL AND s.managed_role=u.role AND s.managed_expires_at>now()) OR (s.managed_expires_at IS NULL AND NOT $2::boolean))',[hash(raw),managedPortalEnabled()]);if(!result.rows[0])throw new HttpError(401,'AUTH_REQUIRED','Session expired');req.actor=result.rows[0] as Actor;}
+async function auth(req:FastifyRequest){const raw=req.cookies.onesa_session;if(!raw)throw new HttpError(401,'AUTH_REQUIRED','Sign in required');const result=await db.query('SELECT u.id,u.role,u.email,s.csrf FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now() AND NOT u.disabled AND ((s.managed_expires_at IS NOT NULL AND s.managed_role=u.role AND s.managed_expires_at>now()) OR (s.managed_expires_at IS NULL AND NOT $2::boolean))',[hash(raw),legacyPortalAuthenticationDisabled()]);if(!result.rows[0])throw new HttpError(401,'AUTH_REQUIRED','Session expired');req.actor=result.rows[0] as Actor;}
 function allow(allowed:readonly Role[]){return async(req:FastifyRequest)=>{await auth(req);if(!permitted(req.actor!.role,allowed))throw new HttpError(403,'FORBIDDEN','Your role cannot perform this action');if(!['GET','HEAD','OPTIONS'].includes(req.method)&&req.headers['x-csrf-token']!==req.actor!.csrf)throw new HttpError(403,'CSRF','Refresh your session before retrying');};}
 const any=allow(roles);
 const page=(q:z.infer<typeof C.query>)=>[(q.page-1)*q.limit,q.limit];
@@ -67,7 +67,7 @@ export async function buildApp(options:{logging?:boolean;managedPortalProvider?:
    const operation = (req.routeOptions.schema as { operationId?: string } | undefined)?.operationId;
    if (!operation) return;
    if ((process.env.NODE_ENV !== "test" && registrationIssuers.has(operation)) ||
-       (delegatedAdministration && (delegatedAccountOperation(operation) || (managedPortalEnabled() && legacyStaffCredentialOperation(operation))))) {
+       (delegatedAdministration && (delegatedAccountOperation(operation) || (legacyPortalAuthenticationDisabled() && legacyStaffCredentialOperation(operation))))) {
      throw new HttpError(403, 'IDENTITY_ADMINISTRATION_MOVED', 'Manage accounts and approvals in Onesa Identity.');
    }
  });

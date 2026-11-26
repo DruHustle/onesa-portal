@@ -2,16 +2,26 @@ import "./local-environment.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 import { calculatePKCECodeChallenge } from "openid-client";
 
-test("managed Portal callback verifies the signed grant and keeps an existing editorial account during issuer downtime", async () => {
+test("managed Portal callback verifies the signed grant and keeps an existing editorial account during issuer downtime", async (t) => {
   if (!process.env.TEST_DATABASE_URL)
     throw Error("Isolated loopback test database required");
   const origin = "https://portal.example.test",
     issuer = "https://identity.example.test/",
     audience = "https://portal-api.example.test",
-    clientId = "portal-web";
+    clientId = "portal-web",
+    clientSecret = randomUUID();
+  const directory = mkdtempSync(join(tmpdir(), "portal-token-test-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const secretFile = join(directory, "client-secret");
+  writeFileSync(secretFile, clientSecret + "\n", { mode: 0o600 });
+  delete process.env.ONESA_IDENTITY_PORTAL_TOKEN_AUTH_METHOD;
+  delete process.env.ONESA_IDENTITY_PORTAL_CLIENT_SECRET;
   Object.assign(process.env, {
     DATABASE_URL: process.env.TEST_DATABASE_URL,
     PUBLIC_ORIGIN: origin,
@@ -21,11 +31,13 @@ test("managed Portal callback verifies the signed grant and keeps an existing ed
     ONESA_IDENTITY_ISSUER: issuer,
     ONESA_IDENTITY_PORTAL_AUDIENCE: audience,
     ONESA_IDENTITY_PORTAL_CLIENT_ID: clientId,
-    ONESA_IDENTITY_PORTAL_CLIENT_SECRET: randomUUID(),
+    ONESA_IDENTITY_PORTAL_CLIENT_SECRET_FILE: secretFile,
   });
   const { buildApp } = await import("../src/app.js");
   const { managedConfig, portalProvider, portalReturnPath } =
     await import("../src/auth/managed-portal.js");
+  assert.equal(managedConfig().tokenAuthMethod, "client_secret_basic");
+  process.env.ONESA_IDENTITY_PORTAL_TOKEN_AUTH_METHOD = "client_secret_post";
   const { db } = await import("../src/services/db.js");
   const { migrate } = await import("../src/services/migrate.js");
   const { hash } = await import("../src/auth/crypto.js");
@@ -84,6 +96,8 @@ test("managed Portal callback verifies the signed grant and keeps an existing ed
       case "/oauth/token": {
         const form = new URLSearchParams(String(init?.body));
         assert.equal(form.get("code"), "single-use-test-code");
+        assert.equal(form.get("client_id"), clientId);
+        assert.equal(form.get("client_secret"), clientSecret);
         assert.equal(
           await calculatePKCECodeChallenge(form.get("code_verifier")!),
           challenge,
@@ -506,6 +520,40 @@ test("managed Portal callback verifies the signed grant and keeps an existing ed
       [signedUser],
     );
     assert.equal((await app.inject(await start())).statusCode, 403);
+
+    const existingOwner = randomUUID();
+    const legacyToken = randomUUID() + randomUUID();
+    await db.query(
+      "INSERT INTO users(id,email,password_hash,role) VALUES ($1,$2,'unused','owner')",
+      [existingOwner, existingOwner + "@example.invalid"],
+    );
+    await db.query(
+      "INSERT INTO sessions(token_hash,user_id,csrf,expires_at) VALUES($1,$2,$3,now()+interval '1 minute')",
+      [hash(legacyToken), existingOwner, randomUUID()],
+    );
+    const existingSession = {
+      url: "/api/v1/auth/me",
+      headers: { cookie: "onesa_session=" + legacyToken },
+    };
+    assert.equal((await app.inject(existingSession)).statusCode, 401);
+
+    process.env.ONESA_IDENTITY_PORTAL_LOGIN = "transition";
+    try {
+      const transition = await buildApp({
+        logging: false,
+        managedPortalProvider: provider,
+      });
+      try {
+        assert.equal((await transition.inject(existingSession)).statusCode, 200);
+        const managedStart = await transition.inject({ url: prefix + "/start?next=%2Fadmin" });
+        assert.equal(managedStart.statusCode, 303);
+        assert.equal(new URL(managedStart.headers.location!).searchParams.get("code_challenge_method"), "S256");
+      } finally {
+        await transition.close();
+      }
+    } finally {
+      process.env.ONESA_IDENTITY_PORTAL_LOGIN = "managed";
+    }
 
     assert.equal(portalReturnPath("//other.example/"), "/admin");
   } finally {

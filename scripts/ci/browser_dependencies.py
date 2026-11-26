@@ -10,6 +10,12 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
+RUNNER_MIRRORS = {
+    "azure.archive.ubuntu.com",
+    "us-east-2.ec2.archive.ubuntu.com",
+    "us-west-2.ec2.archive.ubuntu.com",
+}
+
 NETWORK = (
     'Acquire::http::Timeout "20";\n'
     'Acquire::https::Timeout "20";\n'
@@ -36,7 +42,7 @@ def rewrite_sources(text, deb822=False, mirror_files=None):
             uri = urlsplit(value)
         except ValueError:
             raise ValueError("Invalid Ubuntu mirror URI structure; no rewrite performed") from None
-        if uri.hostname not in {"azure.archive.ubuntu.com", "us-east-2.ec2.archive.ubuntu.com"}:
+        if uri.hostname not in RUNNER_MIRRORS:
             return value
         try:
             port = uri.port
@@ -160,19 +166,16 @@ def rewrite_mirror_list(text, *, archive_dns_unavailable=False):
             or uri.query
             or uri.fragment
             or uri.path not in {"/ubuntu", "/ubuntu/"}
-            or uri.hostname
-            not in {
-                "azure.archive.ubuntu.com",
+            or uri.hostname not in RUNNER_MIRRORS | {
                 "archive.ubuntu.com",
                 "security.ubuntu.com",
-                "us-east-2.ec2.archive.ubuntu.com",
             }
         ):
             raise ValueError(
                 "Unexpected runner mirror-list URI: "
                 + json.dumps(mirror_uri_diagnostic(uri, line_number), sort_keys=True)
             )
-        if uri.hostname in {"azure.archive.ubuntu.com", "us-east-2.ec2.archive.ubuntu.com"}:
+        if uri.hostname in RUNNER_MIRRORS:
             removed += 1
             continue
         if uri.hostname == "archive.ubuntu.com" and uri.scheme == "https":

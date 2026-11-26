@@ -302,11 +302,12 @@ class BrowserDependenciesTests(unittest.TestCase):
 
     def test_regional_failover_removes_reviewed_ec2_and_azure_mirrors(self):
         regional = "http://us-east-2.ec2.archive.ubuntu.com/ubuntu/ priority:1\n"
+        regional += "http://us-west-2.ec2.archive.ubuntu.com/ubuntu/ priority:1\n"
         azure = "http://azure.archive.ubuntu.com/ubuntu/ priority:2\n"
         canonical = "https://archive.ubuntu.com/ubuntu/ priority:3\n"
         self.assertEqual(
             browser.rewrite_mirror_list(regional + azure + canonical),
-            (canonical, 2),
+            (canonical, 3),
         )
         with self.assertRaisesRegex(ValueError, "signed archive transport"):
             browser.rewrite_mirror_list(regional)

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import * as oidc from "openid-client";
 import { createRemoteJWKSet, customFetch, jwtVerify } from "jose";
@@ -45,8 +46,12 @@ const legacyStaffCredentials = new Set([
 export function legacyStaffCredentialOperation(id?: string) {
   return id !== undefined && legacyStaffCredentials.has(id);
 }
-export function managedPortalEnabled() {
+export function legacyPortalAuthenticationDisabled() {
   return process.env.ONESA_IDENTITY_PORTAL_LOGIN === "managed";
+}
+export function managedPortalEnabled() {
+  return legacyPortalAuthenticationDisabled() ||
+    process.env.ONESA_IDENTITY_PORTAL_LOGIN === "transition";
 }
 
 export function portalReturnPath(value: unknown) {
@@ -77,6 +82,11 @@ export function managedConfig() {
     throw Error(
       "Managed Portal login requires absolute HTTPS Portal and issuer origins",
     );
+  const secretFile = process.env.ONESA_IDENTITY_PORTAL_CLIENT_SECRET_FILE;
+  const secretValue = process.env.ONESA_IDENTITY_PORTAL_CLIENT_SECRET;
+  if (secretFile && secretValue)
+    throw Error("Configure one managed Portal client secret source");
+
   return {
     issuer,
     clientId: z
@@ -84,10 +94,12 @@ export function managedConfig() {
       .min(1)
       .max(200)
       .parse(process.env.ONESA_IDENTITY_PORTAL_CLIENT_ID),
-    secret: z
-      .string()
-      .min(32)
-      .parse(process.env.ONESA_IDENTITY_PORTAL_CLIENT_SECRET),
+    secret: z.string().min(32).parse(
+      secretFile ? readFileSync(secretFile, "utf8").trimEnd() : secretValue,
+    ),
+    tokenAuthMethod: z.enum(["client_secret_basic", "client_secret_post"])
+      .default("client_secret_basic")
+      .parse(process.env.ONESA_IDENTITY_PORTAL_TOKEN_AUTH_METHOD),
     audience: z
       .string()
       .min(1)
@@ -182,7 +194,9 @@ export function portalProvider(
             client_secret: config.secret,
             id_token_signed_response_alg: "RS256",
           },
-          oidc.ClientSecretBasic(config.secret),
+          config.tokenAuthMethod === "client_secret_post"
+            ? oidc.ClientSecretPost(config.secret)
+            : oidc.ClientSecretBasic(config.secret),
           {
             timeout: 5,
             execute: [oidc.enableNonRepudiationChecks],
