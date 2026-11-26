@@ -46,7 +46,7 @@ export function SiteFooter({locale}: {locale: Locale}) {
         <Link href={`/${locale}/privacy`}>{de ? 'Datenschutz' : 'Privacy'}</Link>
         <Link href={`/${locale}/cookies`}>Cookies</Link>
         <Link href={`/${locale}/accessibility`}>{de ? 'Barrierefreiheit' : 'Accessibility'}</Link>
-        <Link href="/admin">Administration</Link>
+        <Link href="/intranet">Onesa Intranet</Link>
       </nav>
     </div>
   </footer>;
