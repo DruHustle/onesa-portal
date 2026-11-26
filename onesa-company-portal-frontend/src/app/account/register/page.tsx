@@ -23,7 +23,7 @@ export default async function Register({ searchParams }: {
   const isAdmin = next === "/admin" || audience === "admin";
   const destination = identityRegistrationUrl(isAdmin ? "admin" : "user");
   return <main className={styles.shell}><section className={styles.card} aria-labelledby="account-title">
-    <h1 id="account-title">{isAdmin ? "Request administrator access" : "Onesa Account"}</h1>
+    <h1 id="account-title">{isAdmin ? "Request administrator access" : "Sign up"}</h1>
     {destination ? <RegistrationDeparture destination={destination} audience={isAdmin ? "admin" : "user"} returnPath={returnPath}/>
       : <p role="status">Registration is temporarily unavailable. Please try again later.</p>}
     {returnPath && <p><a href={returnPath} referrerPolicy="no-referrer">{docsReturnPath ? "Return to document sign-in" : "Return to product sign-in"}</a></p>}
