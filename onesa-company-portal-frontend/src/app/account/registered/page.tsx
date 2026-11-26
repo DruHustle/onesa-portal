@@ -14,7 +14,7 @@ export default async function Registered({ searchParams }: { searchParams: Promi
       <a href="/admin#workspace">Sign in to the staff workspace</a>
     </> : <>
       <p>You have returned to Company Portal from Onesa Identity.</p>
-      <a href="/account">Open my Onesa account</a>
+      <a href="/account">Account settings</a>
     </>}
     <p><a href="/en">Visit the Onesa company website</a></p>
   </section></main>;
